@@ -168,3 +168,25 @@ create table if not exists implementaciones (
 
 alter table implementaciones enable row level security;
 create policy "anon_all_implementaciones" on implementaciones for all to anon using (true) with check (true);
+
+-- ------------------------------------------------------------------
+-- Aprobación por vendedor dentro de cada liquidación (no todo-o-nada por
+-- mes): liquidaciones.estado/revisado_por/revisado_at/motivo_rechazo quedan
+-- sin uso desde acá, la app ya no los toca — ver sql/004_liquidacion_vendedores.sql.
+-- ------------------------------------------------------------------
+create table if not exists liquidacion_vendedores (
+  id bigint generated always as identity primary key,
+  liquidacion_id bigint not null references liquidaciones(id) on delete cascade,
+  vendedor_nombre text not null,
+  estado text not null default 'pendiente' check (estado in ('pendiente','aprobada','rechazada')),
+  revisado_por text,
+  revisado_at timestamptz,
+  motivo_rechazo text,
+  created_at timestamptz not null default now(),
+  unique (liquidacion_id, vendedor_nombre)
+);
+
+alter table liquidacion_vendedores enable row level security;
+create policy "anon_all_liquidacion_vendedores" on liquidacion_vendedores for all to anon using (true) with check (true);
+create index if not exists idx_liq_vend_liq on liquidacion_vendedores(liquidacion_id);
+create index if not exists idx_liq_vend_vendedor on liquidacion_vendedores(vendedor_nombre);

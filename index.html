@@ -430,14 +430,17 @@ async function confirmarCarga(){
     let liq;
     if(existentes.length){
       liq=existentes[0];
-      if(liq.estado!=='pendiente'){
-        prevEl.innerHTML='<div class="alert alert-red">Ya existe una liquidación de '+MESES[mes-1]+' '+anio+' en estado <b>'+liq.estado+'</b>. No se puede sobreescribir desde acá.</div>';
+      const gruposExistentes=await sbFetch('liquidacion_vendedores?liquidacion_id=eq.'+liq.id+'&select=estado');
+      const yaDecididos=gruposExistentes.filter(g=>g.estado!=='pendiente');
+      if(yaDecididos.length){
+        prevEl.innerHTML='<div class="alert alert-red">Ya existe una liquidación de '+MESES[mes-1]+' '+anio+' con '+yaDecididos.length+' vendedor(es) ya aprobado(s)/rechazado(s). No se puede sobreescribir desde acá — si hace falta corregir, avisá para hacerlo a mano.</div>';
         return;
       }
       if(!confirm('Ya existe una carga pendiente para '+MESES[mes-1]+' '+anio+'. ¿Reemplazarla con este archivo?')){renderCargaPreview();return;}
       await sbFetch('liquidacion_detalle?liquidacion_id=eq.'+liq.id,{method:'DELETE'});
       await sbFetch('liquidacion_sin_comision?liquidacion_id=eq.'+liq.id,{method:'DELETE'});
       await sbFetch('liquidacion_excluidos?liquidacion_id=eq.'+liq.id,{method:'DELETE'});
+      await sbFetch('liquidacion_vendedores?liquidacion_id=eq.'+liq.id,{method:'DELETE'});
       await sbFetch('liquidaciones?id=eq.'+liq.id,{method:'PATCH',body:JSON.stringify({archivo_nombre:PARSED.archivoNombre,cargado_por:CU.label,created_at:new Date().toISOString()})});
     }else{
       const rows=await sbFetch('liquidaciones',{method:'POST',body:JSON.stringify({mes,anio,archivo_nombre:PARSED.archivoNombre,cargado_por:CU.label})});
@@ -453,6 +456,12 @@ async function confirmarCarga(){
     for(const part of chunk(PARSED.excluidos.map(r=>({...r,liquidacion_id:liq.id})),500)){
       if(part.length)await sbFetch('liquidacion_excluidos',{method:'POST',body:JSON.stringify(part)});
     }
+    // Un grupo por vendedor (unión de Detalle + Sin Comisión) para poder aprobar/rechazar por separado.
+    const vendedoresDelMes=new Set([...PARSED.detalle.map(r=>r.vendedor_nombre),...PARSED.sinComision.map(r=>r.vendedor_nombre)].filter(Boolean));
+    const gruposVendedor=[...vendedoresDelMes].map(vendedor_nombre=>({liquidacion_id:liq.id,vendedor_nombre}));
+    for(const part of chunk(gruposVendedor,500)){
+      if(part.length)await sbFetch('liquidacion_vendedores',{method:'POST',body:JSON.stringify(part)});
+    }
     PARSED=null;
     sTab('historial');
     setTimeout(()=>verLiquidacion(liq.id),50);
@@ -467,18 +476,25 @@ async function confirmarCarga(){
 async function rHistorialTab(){
   document.getElementById('mc').innerHTML='<div class="loading">Cargando...</div>';
   try{
-    const liqs=await sbFetch('liquidaciones?select=*&order=anio.desc,mes.desc');
+    const [liqs,grupos]=await Promise.all([
+      sbFetch('liquidaciones?select=*&order=anio.desc,mes.desc'),
+      sbFetch('liquidacion_vendedores?select=liquidacion_id,estado'),
+    ]);
     DB.liquidaciones=liqs;
+    const resumenPorLiq={};
+    grupos.forEach(g=>{
+      if(!resumenPorLiq[g.liquidacion_id])resumenPorLiq[g.liquidacion_id]={pendiente:0,aprobada:0,rechazada:0};
+      resumenPorLiq[g.liquidacion_id][g.estado]++;
+    });
     document.getElementById('mc').innerHTML=`
       <h2 class="section-title">Historial de Liquidaciones</h2>
-      <div class="table-wrap"><table><thead><tr><th>Período</th><th>Estado</th><th>Cargado por</th><th>Fecha de carga</th><th>Revisado por</th><th></th></tr></thead>
-      <tbody>${liqs.length===0?'<tr><td colspan="6" class="small" style="white-space:normal">Todavía no se cargó ninguna liquidación.</td></tr>':liqs.map(l=>`
+      <div class="table-wrap"><table><thead><tr><th>Período</th><th>Estado (por vendedor)</th><th>Cargado por</th><th>Fecha de carga</th><th></th></tr></thead>
+      <tbody>${liqs.length===0?'<tr><td colspan="5" class="small" style="white-space:normal">Todavía no se cargó ninguna liquidación.</td></tr>':liqs.map(l=>`
         <tr style="cursor:pointer" onclick="verLiquidacion(${l.id})">
           <td><b>${MESES[l.mes-1]} ${l.anio}</b></td>
-          <td>${badgeEstado(l.estado)}</td>
+          <td>${badgeResumenGrupos(resumenPorLiq[l.id])}</td>
           <td>${esc(l.cargado_por||'—')}</td>
           <td>${new Date(l.created_at).toLocaleDateString('es-AR')}</td>
-          <td>${esc(l.revisado_por||'—')}</td>
           <td><button onclick="event.stopPropagation();verLiquidacion(${l.id})">Ver →</button></td>
         </tr>`).join('')}</tbody></table></div>
     `;
@@ -489,6 +505,14 @@ function badgeEstado(e){
   if(e==='rechazada')return '<span class="badge badge-red">Rechazada</span>';
   return '<span class="badge badge-amber">Pendiente</span>';
 }
+function badgeResumenGrupos(r){
+  if(!r)return '<span class="badge badge-gray">Sin vendedores</span>';
+  const total=r.pendiente+r.aprobada+r.rechazada;
+  if(r.aprobada===total)return '<span class="badge badge-green">Aprobada ('+total+'/'+total+')</span>';
+  if(r.rechazada===total)return '<span class="badge badge-red">Rechazada ('+total+'/'+total+')</span>';
+  if(r.pendiente===total)return '<span class="badge badge-amber">Pendiente</span>';
+  return '<span class="badge badge-amber">Parcial — '+r.aprobada+' aprob. / '+r.rechazada+' rech. / '+r.pendiente+' pend.</span>';
+}
 
 // ============================================================
 // DETALLE DE UNA LIQUIDACIÓN
@@ -496,14 +520,17 @@ function badgeEstado(e){
 async function verLiquidacion(id){
   document.getElementById('mc').innerHTML='<div class="loading">Cargando...</div>';
   try{
-    const [liqs,detalle,sinComision,excluidos]=await Promise.all([
+    const [liqs,detalle,sinComision,excluidos,grupos]=await Promise.all([
       sbFetch('liquidaciones?id=eq.'+id+'&select=*'),
       sbFetch('liquidacion_detalle?liquidacion_id=eq.'+id+'&select=*&order=vendedor_nombre.asc,cliente.asc'),
       sbFetch('liquidacion_sin_comision?liquidacion_id=eq.'+id+'&select=*&order=vendedor_nombre.asc'),
       sbFetch('liquidacion_excluidos?liquidacion_id=eq.'+id+'&select=*&order=cliente.asc'),
+      sbFetch('liquidacion_vendedores?liquidacion_id=eq.'+id+'&select=*'),
     ]);
     const liq=liqs[0];
     if(!liq){document.getElementById('mc').innerHTML='<div class="alert alert-red">No encontré esa liquidación.</div>';return;}
+    const grupoPorVendedor={};
+    grupos.forEach(g=>{grupoPorVendedor[g.vendedor_nombre]=g;});
 
     // Resumen por vendedor: siempre los 17 (activos), + los que aparezcan sin match.
     const resumen={};
@@ -519,21 +546,26 @@ async function verLiquidacion(id){
     });
     const totales=Object.values(resumen).reduce((a,v)=>({base:a.base+v.base,comision:a.comision+v.comision,cantCom:a.cantCom+v.cantCom,cantRev:a.cantRev+v.cantRev,baseRev:a.baseRev+v.baseRev}),{base:0,comision:0,cantCom:0,cantRev:0,baseRev:0});
 
-    const puedeActuar=liq.estado==='pendiente';
+    const pendientesCount=grupos.filter(g=>g.estado==='pendiente').length;
 
     document.getElementById('mc').innerHTML=`
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
         <h2 class="section-title" style="margin-bottom:0">${MESES[liq.mes-1]} ${liq.anio}</h2>
-        ${badgeEstado(liq.estado)}
+        ${badgeResumenGrupos({pendiente:grupos.filter(g=>g.estado==='pendiente').length,aprobada:grupos.filter(g=>g.estado==='aprobada').length,rechazada:grupos.filter(g=>g.estado==='rechazada').length})}
       </div>
-      <p class="small" style="margin-bottom:16px">Cargado por ${esc(liq.cargado_por||'—')} el ${new Date(liq.created_at).toLocaleDateString('es-AR')}${liq.archivo_nombre?' · archivo: '+esc(liq.archivo_nombre):''}${liq.revisado_por?' · revisado por '+esc(liq.revisado_por)+' el '+new Date(liq.revisado_at).toLocaleDateString('es-AR'):''}</p>
-      ${liq.estado==='rechazada'&&liq.motivo_rechazo?'<div class="alert alert-red"><b>Motivo del rechazo:</b> '+esc(liq.motivo_rechazo)+'</div>':''}
+      <p class="small" style="margin-bottom:16px">Cargado por ${esc(liq.cargado_por||'—')} el ${new Date(liq.created_at).toLocaleDateString('es-AR')}${liq.archivo_nombre?' · archivo: '+esc(liq.archivo_nombre):''}</p>
+      <p class="small" style="margin-bottom:16px">La aprobación es <b>por vendedor</b> — mirá la columna Acción en la tabla de abajo.${pendientesCount>1?' <span class="link" onclick="aprobarTodosPendientes('+id+')">Aprobar los '+pendientesCount+' pendientes de un saque →</span>':''}</p>
 
       <h3 style="font-size:15px;font-weight:600;margin:20px 0 10px">Resumen por Vendedor</h3>
-      <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Vendedor</th><th>%</th><th>Pagos c/comisión</th><th>Base Comisionable</th><th>Comisión a Pagar</th><th>Pagos a revisar</th><th>Base pendiente</th></tr></thead>
+      <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Vendedor</th><th>%</th><th>Pagos c/comisión</th><th>Base Comisionable</th><th>Comisión a Pagar</th><th>Pagos a revisar</th><th>Base pendiente</th><th>Estado</th><th>Acción</th></tr></thead>
       <tbody>
-        ${Object.entries(resumen).map(([k,v])=>'<tr><td>'+esc(k)+'</td><td>'+(v.pct!=null?v.pct+'%':'—')+'</td><td>'+v.cantCom+'</td><td>'+fmt(v.base)+'</td><td>'+fmt(v.comision)+'</td><td>'+v.cantRev+'</td><td>'+fmt(v.baseRev)+'</td></tr>').join('')}
-        <tr class="total-row"><td>TOTAL</td><td></td><td>${totales.cantCom}</td><td>${fmt(totales.base)}</td><td>${fmt(totales.comision)}</td><td>${totales.cantRev}</td><td>${fmt(totales.baseRev)}</td></tr>
+        ${Object.entries(resumen).map(([k,v])=>{
+          const g=grupoPorVendedor[k];
+          const accion=!g?'':(g.estado==='pendiente'?'<button class="danger" style="font-size:12px;padding:4px 10px" onclick="rechazarGrupoVendedor('+g.id+')">Rechazar</button> <button class="success" style="font-size:12px;padding:4px 10px" onclick="aprobarGrupoVendedor('+g.id+')">Aprobar</button>':'');
+          const motivo=g&&g.estado==='rechazada'&&g.motivo_rechazo?'<div class="small" style="color:#c62828;white-space:normal">'+esc(g.motivo_rechazo)+'</div>':'';
+          return '<tr><td>'+esc(k)+'</td><td>'+(v.pct!=null?v.pct+'%':'—')+'</td><td>'+v.cantCom+'</td><td>'+fmt(v.base)+'</td><td>'+fmt(v.comision)+'</td><td>'+v.cantRev+'</td><td>'+fmt(v.baseRev)+'</td><td>'+(g?badgeEstado(g.estado):'<span class="badge badge-gray">—</span>')+motivo+'</td><td>'+accion+'</td></tr>';
+        }).join('')}
+        <tr class="total-row"><td>TOTAL</td><td></td><td>${totales.cantCom}</td><td>${fmt(totales.base)}</td><td>${fmt(totales.comision)}</td><td>${totales.cantRev}</td><td>${fmt(totales.baseRev)}</td><td></td><td></td></tr>
       </tbody></table></div>
 
       <h3 style="font-size:15px;font-weight:600;margin:20px 0 10px">Detalle — Comisión Calculada (${detalle.length})</h3>
@@ -547,39 +579,43 @@ async function verLiquidacion(id){
       <h3 style="font-size:15px;font-weight:600;margin:20px 0 10px">Excluidos (${excluidos.length})</h3>
       <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Cliente</th><th>Motivo</th><th>Empresa</th><th>Fecha</th><th>N° Pago</th><th>Importe</th></tr></thead>
       <tbody>${excluidos.length===0?'<tr><td colspan="6" class="small" style="white-space:normal">Sin filas.</td></tr>':excluidos.map(r=>'<tr><td>'+esc(r.cliente)+'</td><td>'+esc(r.motivo)+'</td><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+fmt(r.importe)+'</td></tr>').join('')}</tbody></table></div>
-
-      ${puedeActuar?`<div style="display:flex;gap:8px;justify-content:flex-end">
-        <button class="danger" onclick="rechazarLiquidacion(${liq.id})">Rechazar</button>
-        <button class="success" onclick="aprobarLiquidacion(${liq.id})">Aprobar</button>
-      </div>`:''}
     `;
   }catch(e){document.getElementById('mc').innerHTML='<div class="loading" style="color:#c00">Error: '+esc(e.message)+'</div>';}
 }
 
-async function aprobarLiquidacion(id){
-  if(!confirm('¿Aprobar esta liquidación? Al aprobarla, la comisión de cada vendedor pasa a sumar en su cuenta corriente.'))return;
+// Aprobación / rechazo por vendedor dentro de la liquidación (liquidacion_vendedores.id).
+async function aprobarGrupoVendedor(grupoId){
   try{
-    await sbFetch('liquidaciones?id=eq.'+id,{method:'PATCH',body:JSON.stringify({estado:'aprobada',revisado_por:CU.label,revisado_at:new Date().toISOString(),motivo_rechazo:null})});
-    verLiquidacion(id);
+    const rows=await sbFetch('liquidacion_vendedores?id=eq.'+grupoId+'&select=liquidacion_id');
+    await sbFetch('liquidacion_vendedores?id=eq.'+grupoId,{method:'PATCH',body:JSON.stringify({estado:'aprobada',revisado_por:CU.label,revisado_at:new Date().toISOString(),motivo_rechazo:null})});
+    verLiquidacion(rows[0].liquidacion_id);
   }catch(e){alert('Error: '+e.message);}
 }
-function rechazarLiquidacion(id){
+function rechazarGrupoVendedor(grupoId){
   document.getElementById('modal').innerHTML=`
     <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
       <div class="modal">
-        <div class="modal-title">Rechazar liquidación</div>
+        <div class="modal-title">Rechazar comisión de este vendedor</div>
         <div class="form-group"><label>Motivo (obligatorio)</label><textarea id="motivo-rechazo" rows="3"></textarea></div>
-        <div style="display:flex;gap:8px;justify-content:flex-end"><button onclick="closeModal()">Cancelar</button><button class="danger" onclick="confirmarRechazo(${id})">Rechazar</button></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end"><button onclick="closeModal()">Cancelar</button><button class="danger" onclick="confirmarRechazoGrupo(${grupoId})">Rechazar</button></div>
       </div>
     </div>`;
 }
-async function confirmarRechazo(id){
+async function confirmarRechazoGrupo(grupoId){
   const motivo=document.getElementById('motivo-rechazo').value.trim();
   if(!motivo){alert('Ingresá un motivo');return;}
   try{
-    await sbFetch('liquidaciones?id=eq.'+id,{method:'PATCH',body:JSON.stringify({estado:'rechazada',revisado_por:CU.label,revisado_at:new Date().toISOString(),motivo_rechazo:motivo})});
+    const rows=await sbFetch('liquidacion_vendedores?id=eq.'+grupoId+'&select=liquidacion_id');
+    await sbFetch('liquidacion_vendedores?id=eq.'+grupoId,{method:'PATCH',body:JSON.stringify({estado:'rechazada',revisado_por:CU.label,revisado_at:new Date().toISOString(),motivo_rechazo:motivo})});
     closeModal();
-    verLiquidacion(id);
+    verLiquidacion(rows[0].liquidacion_id);
+  }catch(e){alert('Error: '+e.message);}
+}
+async function aprobarTodosPendientes(liquidacionId){
+  if(!confirm('¿Aprobar todos los vendedores pendientes de este mes? Los que ya estén aprobados o rechazados no se tocan.'))return;
+  try{
+    await sbFetch('liquidacion_vendedores?liquidacion_id=eq.'+liquidacionId+'&estado=eq.pendiente',{method:'PATCH',body:JSON.stringify({estado:'aprobada',revisado_por:CU.label,revisado_at:new Date().toISOString()})});
+    verLiquidacion(liquidacionId);
   }catch(e){alert('Error: '+e.message);}
 }
 
@@ -596,8 +632,8 @@ async function rReporteTab(){
       <div class="card" style="margin-bottom:20px;display:flex;gap:12px;align-items:end;flex-wrap:wrap">
         <div class="form-group" style="min-width:220px;margin-bottom:0"><label>Período</label>
           <select id="rep-liq" onchange="rReporteContent()">
-            <option value="aprobadas">Todas las aprobadas</option>
-            ${liqs.map(l=>'<option value="'+l.id+'">'+MESES[l.mes-1]+' '+l.anio+' ('+l.estado+')</option>').join('')}
+            <option value="aprobadas">Solo comisiones aprobadas (todos los meses)</option>
+            ${liqs.map(l=>'<option value="'+l.id+'">'+MESES[l.mes-1]+' '+l.anio+' (todo, sin filtrar por estado)</option>').join('')}
           </select>
         </div>
         <div class="form-group" style="min-width:200px;margin-bottom:0"><label>Buscar cliente</label><input id="rep-filtro" oninput="rReporteContent()" placeholder="Nombre de cliente..."></div>
@@ -613,15 +649,17 @@ async function rReporteContent(){
   const el=document.getElementById('rep-content');
   el.innerHTML='<div class="loading">Cargando...</div>';
   try{
-    let query='liquidacion_detalle?select=*';
+    let rows;
     if(sel==='aprobadas'){
-      const ids=DB.liquidaciones.filter(l=>l.estado==='aprobada').map(l=>l.id);
-      if(!ids.length){el.innerHTML='<p class="small">Todavía no hay liquidaciones aprobadas.</p>';return;}
-      query+='&liquidacion_id=in.('+ids.join(',')+')';
+      const gruposAprobados=await sbFetch('liquidacion_vendedores?select=liquidacion_id,vendedor_nombre&estado=eq.aprobada');
+      if(!gruposAprobados.length){el.innerHTML='<p class="small">Todavía no hay ningún vendedor aprobado en ninguna liquidación.</p>';return;}
+      const idsConAprobados=[...new Set(gruposAprobados.map(g=>g.liquidacion_id))];
+      const aprobadoKeys=new Set(gruposAprobados.map(g=>g.liquidacion_id+'|'+g.vendedor_nombre));
+      const all=await sbFetch('liquidacion_detalle?select=*&liquidacion_id=in.('+idsConAprobados.join(',')+')&order=cliente.asc');
+      rows=all.filter(r=>aprobadoKeys.has(r.liquidacion_id+'|'+r.vendedor_nombre));
     }else{
-      query+='&liquidacion_id=eq.'+sel;
+      rows=await sbFetch('liquidacion_detalle?select=*&liquidacion_id=eq.'+sel+'&order=cliente.asc');
     }
-    const rows=await sbFetch(query+'&order=cliente.asc');
     const porCliente={};
     rows.forEach(r=>{
       if(filtro&&!normKey(r.cliente).includes(filtro))return;
@@ -658,15 +696,15 @@ async function rReporteContent(){
 async function rVendedoresTab(){
   document.getElementById('mc').innerHTML='<div class="loading">Cargando...</div>';
   try{
-    const [liqs,detalle,pagos]=await Promise.all([
-      sbFetch('liquidaciones?select=id,estado&estado=eq.aprobada'),
+    const [gruposAprobados,detalle,pagos]=await Promise.all([
+      sbFetch('liquidacion_vendedores?select=liquidacion_id,vendedor_nombre&estado=eq.aprobada'),
       sbFetch('liquidacion_detalle?select=vendedor_nombre,comision_a_pagar,liquidacion_id'),
       sbFetch('pagos_vendedor?select=*'),
     ]);
-    const idsAprobadas=new Set(liqs.map(l=>l.id));
+    const aprobadoKeys=new Set(gruposAprobados.map(g=>g.liquidacion_id+'|'+g.vendedor_nombre));
     const acumPorVendedor={},pagadoPorVendedor={};
     detalle.forEach(r=>{
-      if(!idsAprobadas.has(r.liquidacion_id))return;
+      if(!aprobadoKeys.has(r.liquidacion_id+'|'+r.vendedor_nombre))return;
       acumPorVendedor[r.vendedor_nombre]=(acumPorVendedor[r.vendedor_nombre]||0)+r.comision_a_pagar;
     });
     pagos.forEach(p=>{pagadoPorVendedor[p.vendedor_nombre]=(pagadoPorVendedor[p.vendedor_nombre]||0)+p.importe;});
@@ -688,13 +726,16 @@ async function verVendedor(vendedorId){
   if(!v)return;
   document.getElementById('mc').innerHTML='<div class="loading">Cargando...</div>';
   try{
-    const [liqs,detalle,pagos]=await Promise.all([
-      sbFetch('liquidaciones?select=*&estado=eq.aprobada&order=anio.desc,mes.desc'),
+    const [liqsTodas,gruposAprobados,detalle,pagos]=await Promise.all([
+      sbFetch('liquidaciones?select=*&order=anio.desc,mes.desc'),
+      sbFetch('liquidacion_vendedores?select=liquidacion_id&estado=eq.aprobada&vendedor_nombre=eq.'+encodeURIComponent(v.nombre_mostrar)),
       sbFetch('liquidacion_detalle?select=liquidacion_id,comision_a_pagar,base_comisionable&vendedor_nombre=eq.'+encodeURIComponent(v.nombre_mostrar)),
       sbFetch('pagos_vendedor?select=*&vendedor_nombre=eq.'+encodeURIComponent(v.nombre_mostrar)+'&order=fecha.desc'),
     ]);
+    const idsAprobados=new Set(gruposAprobados.map(g=>g.liquidacion_id));
+    const liqs=liqsTodas.filter(l=>idsAprobados.has(l.id));
     const porLiq={};
-    detalle.forEach(r=>{if(!porLiq[r.liquidacion_id])porLiq[r.liquidacion_id]={base:0,comision:0};porLiq[r.liquidacion_id].base+=r.base_comisionable;porLiq[r.liquidacion_id].comision+=r.comision_a_pagar;});
+    detalle.forEach(r=>{if(!idsAprobados.has(r.liquidacion_id))return;if(!porLiq[r.liquidacion_id])porLiq[r.liquidacion_id]={base:0,comision:0};porLiq[r.liquidacion_id].base+=r.base_comisionable;porLiq[r.liquidacion_id].comision+=r.comision_a_pagar;});
     const liqsConDatos=liqs.filter(l=>porLiq[l.id]);
     const totalAcum=liqsConDatos.reduce((a,l)=>a+porLiq[l.id].comision,0);
     const totalPagado=pagos.reduce((a,p)=>a+p.importe,0);

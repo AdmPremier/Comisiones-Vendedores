@@ -13,8 +13,9 @@ gestiona el resultado de ese cálculo: carga, aprobación y pagos.
 1. **Crear un proyecto nuevo en [supabase.com](https://supabase.com)** (gratis).
 2. En el SQL Editor del proyecto, correr [`sql/schema.sql`](sql/schema.sql) — crea las tablas y
    carga los 17 vendedores con su % vigente. Si la base ya existía antes del 7-sep-2026, correr
-   también [`sql/002_sin_comision_aplica.sql`](sql/002_sin_comision_aplica.sql) y
-   [`sql/003_implementaciones.sql`](sql/003_implementaciones.sql).
+   también, en orden, [`sql/002_sin_comision_aplica.sql`](sql/002_sin_comision_aplica.sql),
+   [`sql/003_implementaciones.sql`](sql/003_implementaciones.sql) y
+   [`sql/004_liquidacion_vendedores.sql`](sql/004_liquidacion_vendedores.sql).
 3. En **Project Settings → API**, copiar la **Project URL** y la clave **anon/public**.
 4. Abrir `index.html` y reemplazar al principio del `<script>`:
    ```js
@@ -43,9 +44,13 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
    Sin Comisión - Revisar, Excluidos).
 2. En la app, pestaña **Cargar Liquidación** → elegir mes/año (se autodetecta según las fechas del
    archivo) → subir el Excel → revisar el preview → **Confirmar y guardar**.
-3. En **Historial**, abrir la liquidación cargada y **Aprobar** o **Rechazar** (con motivo).
-4. Al aprobar, la comisión de cada vendedor pasa a sumar en su cuenta corriente (pestaña
-   **Vendedores**), donde se pueden registrar los pagos reales que se le hacen.
+3. En **Historial**, abrir la liquidación cargada. La aprobación es **por vendedor, no por mes
+   completo**: cada vendedor con actividad ese mes tiene su propio Aprobar/Rechazar (con motivo) en
+   la tabla de Resumen, así un caso puntual (ej. un cheque rechazado a confirmar) no frena a los
+   demás. Hay un atajo "Aprobar todos los pendientes de un saque" para el caso común de aprobar
+   todo junto.
+4. Al aprobar el grupo de un vendedor, su comisión de ese mes pasa a sumar en su cuenta corriente
+   (pestaña **Vendedores**), donde se pueden registrar los pagos reales que se le hacen.
 5. **Reporte por Cliente** agrupa todo el detalle (de liquidaciones aprobadas, o de un mes puntual)
    por cliente.
 6. **Implementaciones** es un buzón de pedidos de mejora (mismo patrón que Hemkam-Laura y "Carga de
@@ -66,6 +71,11 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
 - La hoja "Sin Comisión - Revisar" real trae una columna extra, **"Aplica"** (valores como 50/50,
   RM, FC, CHR, N/C, ?), que son anotaciones manuales de Diego para su propio seguimiento — se
   guarda y se muestra tal cual, sin ninguna lógica automática atada a esos códigos.
+- **Aprobación por vendedor** (7-sep-2026): la tabla `liquidaciones` conserva sus columnas
+  `estado`/`revisado_por`/`revisado_at`/`motivo_rechazo` por compatibilidad, pero ya no se usan —
+  la app aprueba/rechaza por vendedor en la tabla `liquidacion_vendedores` (una fila por
+  `(liquidacion_id, vendedor_nombre)`). La cuenta corriente y el Reporte por Cliente filtran por
+  esta tabla, no por el estado de la liquidación completa.
 - Si el Excel trae un vendedor cuyo nombre no matchea ningún `nombre_mostrar` de la tabla
   `vendedores`, el preview de carga lo marca en rojo. Igual se puede confirmar la carga, pero esa
   comisión no va a sumar en la cuenta corriente de nadie hasta que el nombre coincida (ajustar a
