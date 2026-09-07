@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "comisiones-vendedores",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8765", "--directory", "C:\\Claude\\Projects\\Comisiones-Vendedores"],
+      "port": 8765
+    }
+  ]
+}
