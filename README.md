@@ -13,7 +13,8 @@ gestiona el resultado de ese cálculo: carga, aprobación y pagos.
 1. **Crear un proyecto nuevo en [supabase.com](https://supabase.com)** (gratis).
 2. En el SQL Editor del proyecto, correr [`sql/schema.sql`](sql/schema.sql) — crea las tablas y
    carga los 17 vendedores con su % vigente. Si la base ya existía antes del 7-sep-2026, correr
-   también [`sql/002_sin_comision_aplica.sql`](sql/002_sin_comision_aplica.sql).
+   también [`sql/002_sin_comision_aplica.sql`](sql/002_sin_comision_aplica.sql) y
+   [`sql/003_implementaciones.sql`](sql/003_implementaciones.sql).
 3. En **Project Settings → API**, copiar la **Project URL** y la clave **anon/public**.
 4. Abrir `index.html` y reemplazar al principio del `<script>`:
    ```js
@@ -47,6 +48,9 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
    **Vendedores**), donde se pueden registrar los pagos reales que se le hacen.
 5. **Reporte por Cliente** agrupa todo el detalle (de liquidaciones aprobadas, o de un mes puntual)
    por cliente.
+6. **Implementaciones** es un buzón de pedidos de mejora (mismo patrón que Hemkam-Laura y "Carga de
+   cheques con CP"): cualquiera anota una idea, queda en "Pendientes", y se marca "Realizado" cuando
+   se hace.
 
 ## Notas de diseño / pendientes conocidos
 

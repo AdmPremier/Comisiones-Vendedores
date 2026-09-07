@@ -151,3 +151,20 @@ create table if not exists pagos_vendedor (
 alter table pagos_vendedor enable row level security;
 create policy "anon_all_pagos_vendedor" on pagos_vendedor for all to anon using (true) with check (true);
 create index if not exists idx_pagos_vendedor on pagos_vendedor(vendedor_nombre);
+
+-- ------------------------------------------------------------------
+-- Implementaciones: buzón de pedidos de mejora (mismo patrón que
+-- Hemkam-Laura y "Carga de cheques con CP").
+-- ------------------------------------------------------------------
+create table if not exists implementaciones (
+  id bigint generated always as identity primary key,
+  nombre text not null,
+  titulo text not null,
+  descripcion text not null,
+  estado text not null default 'pendiente' check (estado in ('pendiente','realizada')),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz
+);
+
+alter table implementaciones enable row level security;
+create policy "anon_all_implementaciones" on implementaciones for all to anon using (true) with check (true);

@@ -71,6 +71,12 @@ tr.total-row td{font-weight:700;border-top:2px solid #ddd;background:#fafafa}
 .saldo-zero{color:#888;font-weight:700}
 .small{font-size:12px;color:#888}
 .link{color:#1565c0;cursor:pointer;text-decoration:underline}
+.impl-card{background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:16px 20px;margin-bottom:10px}
+.impl-card-realizada{background:#f9f9f9;border:1px solid #e8e8e8;opacity:0.7}
+.impl-nombre{font-size:11px;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px}
+.impl-titulo{font-size:15px;font-weight:600;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.impl-desc{font-size:13px;color:#555;margin-top:10px;padding-top:10px;border-top:1px solid #f0f0f0;white-space:pre-wrap}
+.impl-fecha{font-size:11px;color:#aaa;margin-top:8px}
 </style>
 </head>
 <body>
@@ -195,8 +201,9 @@ document.getElementById('lp').addEventListener('keydown',e=>{if(e.key==='Enter')
 function doLogout(){CU=null;document.getElementById('app-screen').classList.add('hidden');document.getElementById('login-screen').classList.remove('hidden');document.getElementById('lp').value='';}
 
 function bNav(){
-  const tabs=[{id:'cargar',label:'Cargar Liquidación'},{id:'historial',label:'Historial'},{id:'reporte',label:'Reporte por Cliente'},{id:'vendedores',label:'Vendedores'}];
+  const tabs=[{id:'cargar',label:'Cargar Liquidación'},{id:'historial',label:'Historial'},{id:'reporte',label:'Reporte por Cliente'},{id:'vendedores',label:'Vendedores'},{id:'implementaciones',label:'Implementaciones'}];
   document.getElementById('nav-tabs').innerHTML=tabs.map(t=>'<button class="nav-tab" id="tab-'+t.id+'" onclick="sTab(\''+t.id+'\')">'+t.label+'</button>').join('');
+  rImplBadge();
 }
 function sTab(tab){
   document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
@@ -205,6 +212,7 @@ function sTab(tab){
   else if(tab==='historial')rHistorialTab();
   else if(tab==='reporte')rReporteTab();
   else if(tab==='vendedores')rVendedoresTab();
+  else if(tab==='implementaciones')rImplTab();
 }
 
 // ============================================================
@@ -741,6 +749,79 @@ async function confirmarPago(vendedorId){
     closeModal();
     verVendedor(vendedorId);
   }catch(e){err.classList.remove('hidden');err.textContent='Error: '+e.message;}
+}
+
+// ============================================================
+// TAB: IMPLEMENTACIONES (buzón de pedidos de mejora)
+// ============================================================
+async function rImplTab(){
+  document.getElementById('mc').innerHTML='<div class="loading">Cargando...</div>';
+  try{
+    const items=await sbFetch('implementaciones?select=*&order=created_at.desc');
+    const pend=items.filter(i=>i.estado==='pendiente');
+    const real=items.filter(i=>i.estado==='realizada');
+    document.getElementById('mc').innerHTML=`
+      <h2 class="section-title">Implementaciones</h2>
+      <div class="card" style="margin-bottom:24px">
+        <div style="font-size:13px;font-weight:600;margin-bottom:12px;color:#666">NUEVA IMPLEMENTACIÓN</div>
+        <div class="form-group"><label>Tu nombre</label><input id="impl-nombre" type="text" placeholder="Ej: Diego" maxlength="80"></div>
+        <div class="form-group"><label>Título</label><input id="impl-titulo" type="text" placeholder="Título breve de la mejora" maxlength="120"></div>
+        <div class="form-group"><label>Descripción</label><textarea id="impl-desc" rows="4" placeholder="Describí la mejora que necesitás..."></textarea></div>
+        <div id="impl-err" class="alert alert-red hidden"></div>
+        <div style="text-align:right"><button class="primary" onclick="saveImpl()">Guardar</button></div>
+      </div>
+      <h3 style="font-size:15px;font-weight:600;margin-bottom:12px;color:#c62828">⏳ Pendientes (${pend.length})</h3>
+      <div id="impl-pend">${pend.length===0?'<p class="small" style="padding:8px 0">Sin pendientes</p>':pend.map(i=>implCard(i)).join('')}</div>
+      <h3 style="font-size:15px;font-weight:600;margin:24px 0 12px;color:#2a7a0a">✓ Realizadas (${real.length})</h3>
+      <div id="impl-real">${real.length===0?'<p class="small" style="padding:8px 0">Ninguna todavía</p>':real.map(i=>implCard(i)).join('')}</div>
+    `;
+  }catch(e){document.getElementById('mc').innerHTML='<div class="loading" style="color:#c00">Error: '+esc(e.message)+'</div>';}
+}
+function implCard(i){
+  const fecha=new Date(i.created_at).toLocaleDateString('es-AR',{day:'2-digit',month:'2-digit',year:'numeric'});
+  const realizada=i.estado==='realizada';
+  return`<div class="impl-card ${realizada?'impl-card-realizada':''}" id="impl-card-${i.id}">
+    <div class="impl-nombre">${esc(i.nombre)}</div>
+    <div class="impl-titulo" onclick="toggleImpl(${i.id})">
+      <span>${esc(i.titulo)}</span>
+      <div style="display:flex;gap:8px;align-items:center">
+        ${!realizada?`<button class="success" style="font-size:12px;padding:4px 10px" onclick="event.stopPropagation();markRealizada(${i.id})">Realizado</button>`:''}
+        <span style="font-size:12px;color:#aaa">▼</span>
+      </div>
+    </div>
+    <div id="impl-body-${i.id}" class="impl-desc hidden">${esc(i.descripcion)}<div class="impl-fecha">${fecha}</div></div>
+  </div>`;
+}
+function toggleImpl(id){
+  const el=document.getElementById('impl-body-'+id);
+  if(el)el.classList.toggle('hidden');
+}
+async function saveImpl(){
+  const nombre=document.getElementById('impl-nombre').value.trim();
+  const titulo=document.getElementById('impl-titulo').value.trim();
+  const desc=document.getElementById('impl-desc').value.trim();
+  const err=document.getElementById('impl-err');
+  if(!nombre||!titulo||!desc){err.classList.remove('hidden');err.textContent='Completá todos los campos';return;}
+  try{
+    await sbFetch('implementaciones',{method:'POST',body:JSON.stringify({nombre,titulo,descripcion:desc,estado:'pendiente'})});
+    err.classList.add('hidden');
+    rImplBadge();
+    rImplTab();
+  }catch(e){err.classList.remove('hidden');err.textContent='Error: '+e.message;}
+}
+async function markRealizada(id){
+  try{
+    await sbFetch('implementaciones?id=eq.'+id,{method:'PATCH',body:JSON.stringify({estado:'realizada',updated_at:new Date().toISOString()})});
+    rImplBadge();
+    rImplTab();
+  }catch(e){alert('Error: '+e.message);}
+}
+function rImplBadge(){
+  sbFetch('implementaciones?select=id&estado=eq.pendiente').then(r=>{
+    const btn=document.getElementById('tab-implementaciones');if(!btn)return;
+    const n=r.length;
+    btn.innerHTML='Implementaciones'+(n>0?' <span style="background:#c62828;color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;margin-left:4px">'+n+'</span>':'');
+  }).catch(()=>{});
 }
 </script>
 </body>
