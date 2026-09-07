@@ -12,7 +12,8 @@ gestiona el resultado de ese cálculo: carga, aprobación y pagos.
 
 1. **Crear un proyecto nuevo en [supabase.com](https://supabase.com)** (gratis).
 2. En el SQL Editor del proyecto, correr [`sql/schema.sql`](sql/schema.sql) — crea las tablas y
-   carga los 17 vendedores con su % vigente.
+   carga los 17 vendedores con su % vigente. Si la base ya existía antes del 7-sep-2026, correr
+   también [`sql/002_sin_comision_aplica.sql`](sql/002_sin_comision_aplica.sql).
 3. En **Project Settings → API**, copiar la **Project URL** y la clave **anon/public**.
 4. Abrir `index.html` y reemplazar al principio del `<script>`:
    ```js
@@ -52,7 +53,15 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
 - El parseo del Excel es **posicional** (toma las columnas por orden, no por el texto exacto del
   encabezado) porque el archivo lo genera siempre el mismo proceso automatizado. Si el orden de
   columnas de esa tarea programada cambia alguna vez, hay que actualizar `COLS_DETALLE`,
-  `COLS_SIN_COMISION` y `COLS_EXCLUIDOS` en `index.html`.
+  `COLS_SIN_COMISION` y `COLS_EXCLUIDOS` en `index.html`. La fila de encabezado se ubica buscando el
+  texto ("Vendedor" o "Cliente" según la hoja), no por posición fija — así no importa si el Excel
+  trae o no una fila de título arriba (el real trae una en "Detalle", el spec original no la
+  mencionaba).
+- La columna **"% Comisión"** del Excel real viene como fracción (0.05 = 5%), no como "5" —
+  `normalizePct()` en `index.html` lo detecta y convierte (cualquier valor ≤1 se multiplica ×100).
+- La hoja "Sin Comisión - Revisar" real trae una columna extra, **"Aplica"** (valores como 50/50,
+  RM, FC, CHR, N/C, ?), que son anotaciones manuales de Diego para su propio seguimiento — se
+  guarda y se muestra tal cual, sin ninguna lógica automática atada a esos códigos.
 - Si el Excel trae un vendedor cuyo nombre no matchea ningún `nombre_mostrar` de la tabla
   `vendedores`, el preview de carga lo marca en rojo. Igual se puede confirmar la carga, pero esa
   comisión no va a sumar en la cuenta corriente de nadie hasta que el nombre coincida (ajustar a

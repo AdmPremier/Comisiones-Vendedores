@@ -105,7 +105,8 @@ create table if not exists liquidacion_sin_comision (
   cliente text,
   nro_pago text,
   motivo text,
-  importe numeric
+  importe numeric,
+  aplica text                            -- columna "Aplica" del Excel real (ej: "50/50", "RM", "FC", "CHR", "N/C") — significado a confirmar con Diego
 );
 
 alter table liquidacion_sin_comision enable row level security;

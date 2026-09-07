@@ -226,17 +226,27 @@ function findSheetName(wb,keywords){
 }
 // Columnas por posición (0-based), según el orden documentado en el spec funcional.
 const COLS_DETALLE=['vendedor','empresa','fecha','cliente','nro_pago','tipo_doc','nro_documento','importe_pago','neto_documento','total_documento','base_comisionable','pct_comision','comision_a_pagar'];
-const COLS_SIN_COMISION=['vendedor','empresa','fecha','cliente','nro_pago','motivo','importe'];
+const COLS_SIN_COMISION=['vendedor','empresa','fecha','cliente','nro_pago','motivo','importe','aplica'];
 const COLS_EXCLUIDOS=['cliente','motivo','empresa','fecha','nro_pago','importe'];
 
 function sheetRows(ws){
   // header:1 -> array de arrays; nos independiza de cómo estén tipeados los encabezados reales.
   return XLSX.utils.sheet_to_json(ws,{header:1,defval:'',raw:true});
 }
-function mapRows(rawRows,cols){
-  // salta la primera fila (encabezado) y cualquier fila vacía
+function findHeaderRowIdx(rawRows,firstColKeyword){
+  // Busca la fila cuya primera celda matchea el encabezado esperado (ej: "Vendedor", "Cliente").
+  // Necesario porque algunas hojas traen una fila de título arriba del encabezado real y otras no.
+  const nk=normKey(firstColKeyword);
+  for(let i=0;i<rawRows.length;i++){
+    if(normKey(rawRows[i]&&rawRows[i][0])===nk)return i;
+  }
+  return -1; // no se encontró: el caller cae a asumir que la fila 0 es el encabezado
+}
+function mapRows(rawRows,cols,headerKeyword){
+  const headerIdx=findHeaderRowIdx(rawRows,headerKeyword);
+  const startIdx=headerIdx>=0?headerIdx+1:1;
   const out=[];
-  for(let i=1;i<rawRows.length;i++){
+  for(let i=startIdx;i<rawRows.length;i++){
     const row=rawRows[i];
     if(!row||row.every(c=>c===''||c==null))continue;
     const obj={};
@@ -244,6 +254,13 @@ function mapRows(rawRows,cols){
     out.push(obj);
   }
   return out;
+}
+function normalizePct(v){
+  // El Excel real guarda "% Comisión" como fracción (0.05 = 5%), no como "5". Cualquier
+  // valor <=1 se interpreta como fracción y se pasa a porcentaje entero (para que coincida
+  // con la escala de vendedores.pct_comision, que guarda 5, 7.5, 10, 30...).
+  const n=parseNum(v);
+  return (n>0&&n<=1)?n*100:n;
 }
 
 let PARSED=null; // { detalle:[], sinComision:[], excluidos:[], sheetsFound:{...} }
@@ -254,9 +271,9 @@ function parseWorkbook(wb){
   const excSheet=findSheetName(wb,SHEET_KEYWORDS.excluidos);
   if(!detSheet)throw new Error('No encontré la hoja "Detalle - Comisión Calculada" en el Excel. Hojas disponibles: '+wb.SheetNames.join(', '));
 
-  const detalleRaw=mapRows(sheetRows(wb.Sheets[detSheet]),COLS_DETALLE);
-  const sinComisionRaw=scSheet?mapRows(sheetRows(wb.Sheets[scSheet]),COLS_SIN_COMISION):[];
-  const excluidosRaw=excSheet?mapRows(sheetRows(wb.Sheets[excSheet]),COLS_EXCLUIDOS):[];
+  const detalleRaw=mapRows(sheetRows(wb.Sheets[detSheet]),COLS_DETALLE,'Vendedor');
+  const sinComisionRaw=scSheet?mapRows(sheetRows(wb.Sheets[scSheet]),COLS_SIN_COMISION,'Vendedor'):[];
+  const excluidosRaw=excSheet?mapRows(sheetRows(wb.Sheets[excSheet]),COLS_EXCLUIDOS,'Cliente'):[];
 
   const detalle=detalleRaw.map(r=>({
     vendedor_nombre:String(r.vendedor||'').trim(),
@@ -270,7 +287,7 @@ function parseWorkbook(wb){
     neto_documento:parseNum(r.neto_documento),
     total_documento:parseNum(r.total_documento),
     base_comisionable:parseNum(r.base_comisionable),
-    pct_comision:parseNum(r.pct_comision),
+    pct_comision:normalizePct(r.pct_comision),
     comision_a_pagar:parseNum(r.comision_a_pagar)
   })).filter(r=>r.vendedor_nombre||r.cliente);
 
@@ -281,7 +298,8 @@ function parseWorkbook(wb){
     cliente:String(r.cliente||'').trim(),
     nro_pago:String(r.nro_pago||'').trim(),
     motivo:String(r.motivo||'').trim(),
-    importe:parseNum(r.importe)
+    importe:parseNum(r.importe),
+    aplica:String(r.aplica||'').trim()
   })).filter(r=>r.cliente||r.motivo);
 
   const excluidos=excluidosRaw.map(r=>({
@@ -515,8 +533,8 @@ async function verLiquidacion(id){
       <tbody>${detalle.length===0?'<tr><td colspan="13" class="small" style="white-space:normal">Sin filas.</td></tr>':detalle.map(r=>'<tr><td>'+esc(r.vendedor_nombre)+'</td><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.cliente)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+esc(r.tipo_doc)+'</td><td>'+esc(r.nro_documento)+'</td><td>'+fmt(r.importe_pago)+'</td><td>'+fmt(r.neto_documento)+'</td><td>'+fmt(r.total_documento)+'</td><td>'+fmt(r.base_comisionable)+'</td><td>'+r.pct_comision+'%</td><td>'+fmt(r.comision_a_pagar)+'</td></tr>').join('')}</tbody></table></div>
 
       <h3 style="font-size:15px;font-weight:600;margin:20px 0 10px">Sin Comisión — Revisar (${sinComision.length})</h3>
-      <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Vendedor</th><th>Empresa</th><th>Fecha</th><th>Cliente</th><th>N° Pago</th><th>Motivo</th><th>Importe</th></tr></thead>
-      <tbody>${sinComision.length===0?'<tr><td colspan="7" class="small" style="white-space:normal">Sin filas.</td></tr>':sinComision.map(r=>'<tr><td>'+esc(r.vendedor_nombre)+'</td><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.cliente)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+esc(r.motivo)+'</td><td>'+fmt(r.importe)+'</td></tr>').join('')}</tbody></table></div>
+      <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Vendedor</th><th>Empresa</th><th>Fecha</th><th>Cliente</th><th>N° Pago</th><th>Motivo</th><th>Importe</th><th>Aplica</th></tr></thead>
+      <tbody>${sinComision.length===0?'<tr><td colspan="8" class="small" style="white-space:normal">Sin filas.</td></tr>':sinComision.map(r=>'<tr><td>'+esc(r.vendedor_nombre)+'</td><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.cliente)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+esc(r.motivo)+'</td><td>'+fmt(r.importe)+'</td><td>'+esc(r.aplica)+'</td></tr>').join('')}</tbody></table></div>
 
       <h3 style="font-size:15px;font-weight:600;margin:20px 0 10px">Excluidos (${excluidos.length})</h3>
       <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Cliente</th><th>Motivo</th><th>Empresa</th><th>Fecha</th><th>N° Pago</th><th>Importe</th></tr></thead>
