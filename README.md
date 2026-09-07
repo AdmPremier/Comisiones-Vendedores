@@ -19,8 +19,8 @@ gestiona el resultado de ese cálculo: carga, aprobación y pagos.
    const SUPABASE_URL='https://TU-PROYECTO.supabase.co';
    const SUPABASE_KEY='TU-ANON-KEY';
    ```
-5. Cambiar las contraseñas de `USERS` (usuarios `diego` y `jefe`) por algo real, antes de publicar
-   la app en ningún lado accesible.
+5. Las contraseñas de `USERS` (usuarios `diego` y `gonzalo`) están en `admin` a pedido — cambiarlas
+   por algo más fuerte antes de publicar la app en cualquier lugar accesible desde internet.
 
 No hay build ni dependencias — es un único `index.html` que se puede abrir directo o publicar en
 cualquier hosting estático (Vercel, Netlify, GitHub Pages).

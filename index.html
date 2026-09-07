@@ -79,7 +79,7 @@ tr.total-row td{font-weight:700;border-top:2px solid #ddd;background:#fafafa}
   <div class="login-card">
     <div class="login-brand"><h1>Comisiones de Vendedores</h1><p>Magontex / Instatex</p></div>
     <div class="form-group"><label>Usuario</label>
-      <select id="lu"><option value="">Seleccioná...</option><option value="diego">Diego</option><option value="jefe">Jefe</option></select>
+      <select id="lu"><option value="">Seleccioná...</option><option value="diego">Diego</option><option value="gonzalo">Gonzalo</option></select>
     </div>
     <div class="form-group"><label>Contraseña</label><input id="lp" type="password"></div>
     <div id="le" class="alert alert-red hidden"></div>
@@ -106,13 +106,13 @@ tr.total-row td{font-weight:700;border-top:2px solid #ddd;background:#fafafa}
 // ============================================================
 // CONFIG — reemplazar con las credenciales del proyecto de Supabase
 // ============================================================
-const SUPABASE_URL='https://TU-PROYECTO.supabase.co';
-const SUPABASE_KEY='TU-ANON-KEY';
+const SUPABASE_URL='https://zapnizeildmdqbzywoot.supabase.co';
+const SUPABASE_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InphcG5pemVpbGRtZHFienl3b290Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg3OTA0OTcsImV4cCI6MjEwNDM2NjQ5N30.Ir3KGbg9vsqTnCR1RDBQbZQYZ42jmdsK4jfB5auvqM0';
 
 // Usuarios de la app (login propio, no Supabase Auth — cambiar las claves antes de publicar).
 const USERS={
-  diego:{pass:'cambiar-diego',label:'Diego'},
-  jefe:{pass:'cambiar-jefe',label:'Jefe'}
+  diego:{pass:'admin',label:'Diego'},
+  gonzalo:{pass:'admin',label:'Gonzalo'}
 };
 
 const MESES=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
