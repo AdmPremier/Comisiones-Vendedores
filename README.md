@@ -14,8 +14,9 @@ gestiona el resultado de ese cálculo: carga, aprobación y pagos.
 2. En el SQL Editor del proyecto, correr [`sql/schema.sql`](sql/schema.sql) — crea las tablas y
    carga los 17 vendedores con su % vigente. Si la base ya existía antes del 7-sep-2026, correr
    también, en orden, [`sql/002_sin_comision_aplica.sql`](sql/002_sin_comision_aplica.sql),
-   [`sql/003_implementaciones.sql`](sql/003_implementaciones.sql) y
-   [`sql/004_liquidacion_vendedores.sql`](sql/004_liquidacion_vendedores.sql).
+   [`sql/003_implementaciones.sql`](sql/003_implementaciones.sql),
+   [`sql/004_liquidacion_vendedores.sql`](sql/004_liquidacion_vendedores.sql) y
+   [`sql/005_liquidacion_vendedores_pagado.sql`](sql/005_liquidacion_vendedores_pagado.sql).
 3. En **Project Settings → API**, copiar la **Project URL** y la clave **anon/public**.
 4. Abrir `index.html` y reemplazar al principio del `<script>`:
    ```js
@@ -50,7 +51,10 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
    demás. Hay un atajo "Aprobar todos los pendientes de un saque" para el caso común de aprobar
    todo junto.
 4. Al aprobar el grupo de un vendedor, su comisión de ese mes pasa a sumar en su cuenta corriente
-   (pestaña **Vendedores**), donde se pueden registrar los pagos reales que se le hacen.
+   (pestaña **Vendedores**), donde se pueden registrar los pagos reales que se le hacen. Además, una
+   vez aprobado, aparece un botón **"Marcar pagada"** (badge violeta) — es una marca visual
+   independiente, no descuenta nada de la cuenta corriente ni requiere registrar el pago ahí; sirve
+   solo para ver de un vistazo qué comisiones del mes ya se transfirieron. Se puede revertir.
 5. **Reporte por Cliente** agrupa todo el detalle (de liquidaciones aprobadas, o de un mes puntual)
    por cliente.
 6. **Implementaciones** es un buzón de pedidos de mejora (mismo patrón que Hemkam-Laura y "Carga de

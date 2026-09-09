@@ -25,6 +25,7 @@ button:disabled{opacity:0.4;cursor:not-allowed}
 .badge-amber{background:#fff8e1;color:#f57f17}
 .badge-red{background:#ffebee;color:#c62828}
 .badge-gray{background:#f5f5f5;color:#666}
+.badge-purple{background:#ce93d8;color:#4a148c;font-weight:600}
 nav{background:#fff;border-bottom:1px solid #e0e0e0;padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:54px;position:sticky;top:0;z-index:100;box-shadow:0 1px 3px rgba(0,0,0,0.08)}
 .nav-brand{font-size:16px;font-weight:600}
 .nav-right{display:flex;align-items:center;gap:12px}
@@ -501,6 +502,7 @@ async function rHistorialTab(){
   }catch(e){document.getElementById('mc').innerHTML='<div class="loading" style="color:#c00">Error: '+esc(e.message)+'</div>';}
 }
 function badgeEstado(e){
+  if(e==='pagada')return '<span class="badge badge-purple">Pagada</span>';
   if(e==='aprobada')return '<span class="badge badge-green">Aprobada</span>';
   if(e==='rechazada')return '<span class="badge badge-red">Rechazada</span>';
   return '<span class="badge badge-amber">Pendiente</span>';
@@ -561,9 +563,15 @@ async function verLiquidacion(id){
       <tbody>
         ${Object.entries(resumen).map(([k,v])=>{
           const g=grupoPorVendedor[k];
-          const accion=!g?'':(g.estado==='pendiente'?'<button class="danger" style="font-size:12px;padding:4px 10px" onclick="rechazarGrupoVendedor('+g.id+')">Rechazar</button> <button class="success" style="font-size:12px;padding:4px 10px" onclick="aprobarGrupoVendedor('+g.id+')">Aprobar</button>':'');
+          let accion='';
+          if(g){
+            if(g.estado==='pendiente')accion='<button class="danger" style="font-size:12px;padding:4px 10px" onclick="rechazarGrupoVendedor('+g.id+')">Rechazar</button> <button class="success" style="font-size:12px;padding:4px 10px" onclick="aprobarGrupoVendedor('+g.id+')">Aprobar</button>';
+            else if(g.estado==='aprobada'&&!g.pagado)accion='<button style="font-size:12px;padding:4px 10px;color:#6a1b9a;border-color:#ce93d8" onclick="marcarPagadoGrupo('+g.id+')">Marcar pagada</button>';
+            else if(g.estado==='aprobada'&&g.pagado)accion='<span class="link small" onclick="revertirPagadoGrupo('+g.id+')">revertir</span>';
+          }
           const motivo=g&&g.estado==='rechazada'&&g.motivo_rechazo?'<div class="small" style="color:#c62828;white-space:normal">'+esc(g.motivo_rechazo)+'</div>':'';
-          return '<tr><td>'+esc(k)+'</td><td>'+(v.pct!=null?v.pct+'%':'—')+'</td><td>'+v.cantCom+'</td><td>'+fmt(v.base)+'</td><td>'+fmt(v.comision)+'</td><td>'+v.cantRev+'</td><td>'+fmt(v.baseRev)+'</td><td>'+(g?badgeEstado(g.estado):'<span class="badge badge-gray">—</span>')+motivo+'</td><td>'+accion+'</td></tr>';
+          const estadoVisual=g?(g.estado==='aprobada'&&g.pagado?'pagada':g.estado):null;
+          return '<tr><td>'+esc(k)+'</td><td>'+(v.pct!=null?v.pct+'%':'—')+'</td><td>'+v.cantCom+'</td><td>'+fmt(v.base)+'</td><td>'+fmt(v.comision)+'</td><td>'+v.cantRev+'</td><td>'+fmt(v.baseRev)+'</td><td>'+(g?badgeEstado(estadoVisual):'<span class="badge badge-gray">—</span>')+motivo+'</td><td>'+accion+'</td></tr>';
         }).join('')}
         <tr class="total-row"><td>TOTAL</td><td></td><td>${totales.cantCom}</td><td>${fmt(totales.base)}</td><td>${fmt(totales.comision)}</td><td>${totales.cantRev}</td><td>${fmt(totales.baseRev)}</td><td></td><td></td></tr>
       </tbody></table></div>
@@ -616,6 +624,24 @@ async function aprobarTodosPendientes(liquidacionId){
   try{
     await sbFetch('liquidacion_vendedores?liquidacion_id=eq.'+liquidacionId+'&estado=eq.pendiente',{method:'PATCH',body:JSON.stringify({estado:'aprobada',revisado_por:CU.label,revisado_at:new Date().toISOString()})});
     verLiquidacion(liquidacionId);
+  }catch(e){alert('Error: '+e.message);}
+}
+
+// "Pagada" es una marca visual independiente (no toca pagos_vendedor ni la cuenta corriente) —
+// solo para ver de un vistazo qué comisiones ya se transfirieron.
+async function marcarPagadoGrupo(grupoId){
+  try{
+    const rows=await sbFetch('liquidacion_vendedores?id=eq.'+grupoId+'&select=liquidacion_id');
+    await sbFetch('liquidacion_vendedores?id=eq.'+grupoId,{method:'PATCH',body:JSON.stringify({pagado:true,pagado_por:CU.label,pagado_at:new Date().toISOString()})});
+    verLiquidacion(rows[0].liquidacion_id);
+  }catch(e){alert('Error: '+e.message);}
+}
+async function revertirPagadoGrupo(grupoId){
+  if(!confirm('¿Revertir a "Aprobada" (sin pagar)?'))return;
+  try{
+    const rows=await sbFetch('liquidacion_vendedores?id=eq.'+grupoId+'&select=liquidacion_id');
+    await sbFetch('liquidacion_vendedores?id=eq.'+grupoId,{method:'PATCH',body:JSON.stringify({pagado:false,pagado_por:null,pagado_at:null})});
+    verLiquidacion(rows[0].liquidacion_id);
   }catch(e){alert('Error: '+e.message);}
 }
 

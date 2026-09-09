@@ -182,6 +182,9 @@ create table if not exists liquidacion_vendedores (
   revisado_por text,
   revisado_at timestamptz,
   motivo_rechazo text,
+  pagado boolean not null default false,  -- marca visual independiente, no toca pagos_vendedor
+  pagado_por text,
+  pagado_at timestamptz,
   created_at timestamptz not null default now(),
   unique (liquidacion_id, vendedor_nombre)
 );
