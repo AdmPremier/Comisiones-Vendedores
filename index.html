@@ -635,15 +635,12 @@ async function verLiquidacion(id){
           }
           const motivo=g&&g.estado==='rechazada'&&g.motivo_rechazo?'<div class="small" style="color:#c62828;white-space:normal">'+esc(g.motivo_rechazo)+'</div>':'';
           const estadoVisual=g?(g.estado==='aprobada'&&g.pagado?'pagada':g.estado):null;
-          const ver=g&&v.cantCom>0?'<button style="font-size:12px;padding:4px 10px" onclick="verDetalleVendedor('+g.id+')">Ver</button>':'';
+          let ver=g&&v.cantCom>0?'<button style="font-size:12px;padding:4px 10px" onclick="verDetalleVendedor('+g.id+')">Ver</button>':'';
+          if(g&&v.cantRev>0)ver+=' <button class="danger" style="font-size:12px;padding:4px 10px" onclick="verRevisarVendedor('+g.id+')">⚠ Revisar</button>';
           return '<tr><td>'+esc(k)+'</td><td>'+(v.pct!=null?v.pct+'%':'—')+'</td><td>'+v.cantCom+'</td><td>'+fmt(v.base)+'</td><td>'+fmt(v.comision)+'</td><td>'+v.cantRev+'</td><td>'+fmt(v.baseRev)+'</td><td>'+ver+'</td><td>'+(g?badgeEstado(estadoVisual):'<span class="badge badge-gray">—</span>')+motivo+'</td><td>'+accion+'</td></tr>';
         }).join('')}
         <tr class="total-row"><td>TOTAL</td><td></td><td>${totales.cantCom}</td><td>${fmt(totales.base)}</td><td>${fmt(totales.comision)}</td><td>${totales.cantRev}</td><td>${fmt(totales.baseRev)}</td><td></td><td></td><td></td></tr>
       </tbody></table></div>
-
-      <h3 style="font-size:15px;font-weight:600;margin:20px 0 10px">Sin Comisión — Revisar (${sinComision.length})</h3>
-      <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Vendedor</th><th>Empresa</th><th>Fecha</th><th>Cliente</th><th>N° Pago</th><th>Motivo</th><th>Importe</th><th>Aplica</th></tr></thead>
-      <tbody>${sinComision.length===0?'<tr><td colspan="8" class="small" style="white-space:normal">Sin filas.</td></tr>':sinComision.map(r=>'<tr><td>'+esc(r.vendedor_nombre)+'</td><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.cliente)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+esc(r.motivo)+'</td><td>'+fmt(r.importe)+'</td><td>'+esc(r.aplica)+'</td></tr>').join('')}</tbody></table></div>
 
       <h3 style="font-size:15px;font-weight:600;margin:20px 0 10px">Excluidos (${excluidos.length})</h3>
       <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Cliente</th><th>Motivo</th><th>Empresa</th><th>Fecha</th><th>N° Pago</th><th>Importe</th></tr></thead>
@@ -668,6 +665,30 @@ async function verDetalleVendedor(grupoId){
           <div class="table-wrap" style="margin-bottom:16px;max-height:420px;overflow-y:auto"><table><thead><tr><th>Empresa</th><th>Fecha</th><th>Cliente</th><th>N° Pago</th><th>Tipo</th><th>N° Doc.</th><th>Importe Pago</th><th>Neto Doc.</th><th>Total Doc.</th><th>Base Comis.</th><th>%</th><th>Comisión</th></tr></thead>
           <tbody>${rows.length===0?'<tr><td colspan="12" class="small" style="white-space:normal">Sin filas.</td></tr>':rows.map(r=>'<tr><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.cliente)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+esc(r.tipo_doc)+'</td><td>'+esc(r.nro_documento)+'</td><td>'+fmt(r.importe_pago)+'</td><td>'+fmtOpt(r.neto_documento)+'</td><td>'+fmtOpt(r.total_documento)+'</td><td>'+fmt(r.base_comisionable)+'</td><td>'+r.pct_comision+'%</td><td>'+fmt(r.comision_a_pagar)+'</td></tr>').join('')}
           <tr class="total-row"><td colspan="11">TOTAL</td><td>${fmt(total)}</td></tr>
+          </tbody></table></div>
+          <div style="text-align:right"><button onclick="closeModal()">Cerrar</button></div>
+        </div>
+      </div>`;
+  }catch(e){alert('Error: '+e.message);}
+}
+
+// Pagos de un vendedor todavía sin comisión definida (reemplaza a la vieja tabla plana
+// "Sin Comisión - Revisar" con todos los vendedores juntos).
+async function verRevisarVendedor(grupoId){
+  try{
+    const grupos=await sbFetch('liquidacion_vendedores?id=eq.'+grupoId+'&select=*');
+    const g=grupos[0];
+    if(!g)return;
+    const rows=await sbFetch('liquidacion_sin_comision?liquidacion_id=eq.'+g.liquidacion_id+'&vendedor_nombre=eq.'+encodeURIComponent(g.vendedor_nombre)+'&select=*&order=cliente.asc');
+    const total=rows.reduce((a,r)=>a+r.importe,0);
+    document.getElementById('modal').innerHTML=`
+      <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+        <div class="modal" style="max-width:960px">
+          <div class="modal-title">⚠ ${esc(g.vendedor_nombre)} — a revisar</div>
+          <div class="alert alert-red">Estos pagos todavía no tienen una comisión definida — no suman en "Comisión a Pagar" hasta que se resuelvan en el Excel y se vuelva a cargar.</div>
+          <div class="table-wrap" style="margin-bottom:16px;max-height:420px;overflow-y:auto"><table><thead><tr><th>Empresa</th><th>Fecha</th><th>Cliente</th><th>N° Pago</th><th>Motivo</th><th>Importe</th><th>Aplica</th></tr></thead>
+          <tbody>${rows.length===0?'<tr><td colspan="7" class="small" style="white-space:normal">Sin filas.</td></tr>':rows.map(r=>'<tr><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.cliente)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+esc(r.motivo)+'</td><td>'+fmt(r.importe)+'</td><td>'+esc(r.aplica)+'</td></tr>').join('')}
+          <tr class="total-row"><td colspan="5">TOTAL</td><td>${fmt(total)}</td><td></td></tr>
           </tbody></table></div>
           <div style="text-align:right"><button onclick="closeModal()">Cerrar</button></div>
         </div>

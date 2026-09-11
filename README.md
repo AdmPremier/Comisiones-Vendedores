@@ -57,6 +57,9 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
    demás. Hay un atajo "Aprobar todos los pendientes de un saque" para el caso común de aprobar
    todo junto. El botón **"Ver"** de cada fila abre el detalle de los pagos que forman esa
    comisión puntual (filtrado por vendedor, en vez de una única tabla plana con los 17 mezclados).
+   Si el vendedor tiene pagos sin comisión definida todavía, aparece además **"⚠ Revisar"** (rojo),
+   que abre esos pagos filtrados por vendedor con un aviso explicando que no suman al total hasta
+   que se resuelvan en el Excel.
 4. Al aprobar el grupo de un vendedor, su comisión de ese mes pasa a sumar en su cuenta corriente
    (pestaña **Vendedores**), donde se pueden registrar los pagos reales que se le hacen. Además, una
    vez aprobado, aparece un botón **"Marcar pagada"** (badge violeta) — es una marca visual
