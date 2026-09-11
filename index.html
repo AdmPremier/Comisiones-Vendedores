@@ -672,27 +672,94 @@ async function verDetalleVendedor(grupoId){
   }catch(e){alert('Error: '+e.message);}
 }
 
+// Resolver "a revisar" directo en la app: mismo criterio que el pulido manual en Excel.
+// Divisor sobre el Importe según el tipo (validado contra datos reales de agosto 2026):
+//   A = Factura (21% IVA), B = NOF (sin IVA, importe completo), A/B = mixto (10,5%, la mitad de 21%).
+// CHR (cheque rechazado) es comisión $0 fija, sin divisor. "A o B" queda sin poder calcularse.
+const TIPO_DIVISOR={'A':1.21,'B':1,'A/B':1.105};
+function calcularComisionTipo(tipo,importe,pct){
+  if(tipo==='CHR')return {base:0,comision:0};
+  const div=TIPO_DIVISOR[tipo];
+  if(!div)return null;
+  const base=importe/div;
+  return {base,comision:base*(pct/100)};
+}
+let REVISAR_CTX={};
+
 // Pagos de un vendedor todavía sin comisión definida (reemplaza a la vieja tabla plana
-// "Sin Comisión - Revisar" con todos los vendedores juntos).
+// "Sin Comisión - Revisar" con todos los vendedores juntos). Cada fila se puede resolver acá
+// mismo eligiendo el tipo, sin tener que volver a tocar el Excel.
 async function verRevisarVendedor(grupoId){
   try{
     const grupos=await sbFetch('liquidacion_vendedores?id=eq.'+grupoId+'&select=*');
     const g=grupos[0];
     if(!g)return;
     const rows=await sbFetch('liquidacion_sin_comision?liquidacion_id=eq.'+g.liquidacion_id+'&vendedor_nombre=eq.'+encodeURIComponent(g.vendedor_nombre)+'&select=*&order=cliente.asc');
-    const total=rows.reduce((a,r)=>a+r.importe,0);
+    const v=findVendedor(g.vendedor_nombre);
+    const pct=v?v.pct_comision:0;
+    REVISAR_CTX={};
+    rows.forEach(r=>{
+      REVISAR_CTX[r.id]={
+        liquidacion_id:g.liquidacion_id,vendedor_nombre:g.vendedor_nombre,pct,importe:r.importe,
+        empresa:r.empresa,fecha_pago:r.fecha_pago,cliente:r.cliente,nro_pago:r.nro_pago,
+        documento:String(r.motivo||'').replace(/^Comisión sin definir todavía( — )?/,''),
+        calc:null
+      };
+    });
     document.getElementById('modal').innerHTML=`
       <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
-        <div class="modal" style="max-width:960px">
+        <div class="modal" style="max-width:1000px">
           <div class="modal-title">⚠ ${esc(g.vendedor_nombre)} — a revisar</div>
-          <div class="alert alert-red">Estos pagos todavía no tienen una comisión definida — no suman en "Comisión a Pagar" hasta que se resuelvan en el Excel y se vuelva a cargar.</div>
-          <div class="table-wrap" style="margin-bottom:16px;max-height:420px;overflow-y:auto"><table><thead><tr><th>Empresa</th><th>Fecha</th><th>Cliente</th><th>N° Pago</th><th>Motivo</th><th>Importe</th><th>Aplica</th></tr></thead>
-          <tbody>${rows.length===0?'<tr><td colspan="7" class="small" style="white-space:normal">Sin filas.</td></tr>':rows.map(r=>'<tr><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.cliente)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+esc(r.motivo)+'</td><td>'+fmt(r.importe)+'</td><td>'+esc(r.aplica)+'</td></tr>').join('')}
-          <tr class="total-row"><td colspan="5">TOTAL</td><td>${fmt(total)}</td><td></td></tr>
-          </tbody></table></div>
-          <div style="text-align:right"><button onclick="closeModal()">Cerrar</button></div>
+          <div class="alert alert-red">Elegí el tipo de cada pago para calcular su comisión con el mismo criterio del pulido en Excel (A = Factura 21% IVA, B = NOF completo, A/B = mixto 10,5%, CHR = cheque rechazado $0). Los que dejes sin elegir siguen "a revisar".</div>
+          <div class="table-wrap" style="margin-bottom:16px;max-height:420px;overflow-y:auto"><table><thead><tr><th>Empresa</th><th>Fecha</th><th>Cliente</th><th>N° Pago</th><th>Motivo</th><th>Importe</th><th>Tipo</th><th>Comisión estimada</th></tr></thead>
+          <tbody>${rows.length===0?'<tr><td colspan="8" class="small" style="white-space:normal">Sin filas.</td></tr>':rows.map(r=>`<tr id="revrow-${r.id}">
+            <td>${esc(r.empresa)}</td><td>${fmtFecha(r.fecha_pago)}</td><td>${esc(r.cliente)}</td><td>${esc(r.nro_pago)}</td><td>${esc(r.motivo)}</td><td>${fmt(r.importe)}</td>
+            <td><select id="revtipo-${r.id}" style="width:auto" onchange="onTipoChangeRevisar(${r.id})">
+              <option value="">— Elegir —</option>
+              <option value="A">A · Factura</option>
+              <option value="B">B · NOF</option>
+              <option value="A/B">A/B · Mixto</option>
+              <option value="CHR">CHR · Rechazado</option>
+            </select></td>
+            <td id="revcalc-${r.id}" class="small">—</td>
+          </tr>`).join('')}</tbody></table></div>
+          <div style="text-align:right;display:flex;gap:8px;justify-content:flex-end">
+            <button onclick="closeModal()">Cerrar</button>
+            <button class="success" onclick="confirmarTodasRevisar(${g.liquidacion_id})">Confirmar las que tengan tipo elegido</button>
+          </div>
         </div>
       </div>`;
+  }catch(e){alert('Error: '+e.message);}
+}
+function onTipoChangeRevisar(rowId){
+  const tipo=document.getElementById('revtipo-'+rowId).value;
+  const ctx=REVISAR_CTX[rowId];
+  const calcEl=document.getElementById('revcalc-'+rowId);
+  if(!ctx)return;
+  if(!tipo){ctx.calc=null;calcEl.textContent='—';return;}
+  const r=calcularComisionTipo(tipo,ctx.importe,ctx.pct);
+  if(!r){ctx.calc=null;calcEl.textContent='—';return;}
+  ctx.calc={tipo,base:r.base,comision:r.comision};
+  calcEl.textContent=fmt(r.comision)+' (base '+fmt(r.base)+')';
+}
+async function confirmarTodasRevisar(liquidacionId){
+  const listos=Object.entries(REVISAR_CTX).filter(([id,ctx])=>ctx.calc);
+  if(!listos.length){alert('Elegí el tipo de al menos una fila antes de confirmar.');return;}
+  if(!confirm('¿Confirmar '+listos.length+' fila(s)? Pasan a "Detalle - Comisión Calculada" con la comisión calculada.'))return;
+  try{
+    for(const [rowId,ctx] of listos){
+      await sbFetch('liquidacion_detalle',{method:'POST',body:JSON.stringify({
+        liquidacion_id:ctx.liquidacion_id,vendedor_nombre:ctx.vendedor_nombre,empresa:ctx.empresa,
+        fecha_pago:ctx.fecha_pago,cliente:ctx.cliente,nro_pago:ctx.nro_pago,tipo_doc:ctx.calc.tipo,
+        nro_documento:ctx.documento,importe_pago:ctx.importe,neto_documento:null,total_documento:null,
+        base_comisionable:ctx.calc.base,pct_comision:ctx.pct,comision_a_pagar:ctx.calc.comision
+      })});
+      await sbFetch('liquidacion_sin_comision?id=eq.'+rowId,{method:'DELETE'});
+      delete REVISAR_CTX[rowId];
+      const rowEl=document.getElementById('revrow-'+rowId);if(rowEl)rowEl.remove();
+    }
+    closeModal();
+    verLiquidacion(liquidacionId);
   }catch(e){alert('Error: '+e.message);}
 }
 
