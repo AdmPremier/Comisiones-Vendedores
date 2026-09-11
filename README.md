@@ -55,14 +55,13 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
    completo**: cada vendedor con actividad ese mes tiene su propio Aprobar/Rechazar (con motivo) en
    la tabla de Resumen, así un caso puntual (ej. un cheque rechazado a confirmar) no frena a los
    demás. Hay un atajo "Aprobar todos los pendientes de un saque" para el caso común de aprobar
-   todo junto. El botón **"Ver"** de cada fila abre el detalle de los pagos que forman esa
-   comisión puntual (filtrado por vendedor, en vez de una única tabla plana con los 17 mezclados).
-   Si el vendedor tiene pagos sin comisión definida todavía, aparece además **"⚠ Revisar"** (rojo),
-   que abre esos pagos filtrados por vendedor **y permite resolverlos ahí mismo**: elegís el Tipo
-   de cada pago (A = Factura, B = NOF, A/B = mixto, CHR = cheque rechazado) y la app calcula la
-   comisión en vivo con el mismo criterio del pulido manual en Excel — ver fórmulas exactas más
-   abajo. Al confirmar, esas filas pasan de "Sin Comisión" a "Detalle" de verdad, sin tener que
-   volver a tocar el Excel ni resubir nada.
+   todo junto. Cada vendedor tiene un solo botón — **"Ver"** (o **"⚠ Revisar"** en rojo, si tiene
+   algo sin resolver) — que abre un modal con **todos** sus pagos de ese mes (ya comisionados y
+   pendientes, juntos). Ahí se puede elegir o cambiar el **Tipo** de cualquier fila (incluidas las
+   ya resueltas — A = Factura, B = NOF, A/B = mixto, CHR = cheque rechazado) y la app calcula la
+   comisión en vivo con el mismo criterio del pulido manual en Excel. Nada se guarda hasta tocar
+   **"Guardar cambios"** (se activa solo con algo tocado) — y es reversible: volver a elegir
+   "— Elegir —" en una fila ya resuelta la manda de nuevo a "sin comisión".
 4. Al aprobar el grupo de un vendedor, su comisión de ese mes pasa a sumar en su cuenta corriente
    (pestaña **Vendedores**), donde se pueden registrar los pagos reales que se le hacen. Además, una
    vez aprobado, aparece un botón **"Marcar pagada"** (badge violeta) — es una marca visual
@@ -83,12 +82,16 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
   texto exacto de encabezado) — si Diego cambia el orden de columnas de su planilla pulida, hay que
   actualizar `COLS_DETALLE_V2`. La fila de encabezado se ubica buscando el texto ("Vendedor" o
   "Cliente" según la hoja), no por posición fija, así no importa si hay una fila de título arriba.
-- **Resolver "a revisar" en la app** (11-sep-2026): `TIPO_DIVISOR` en `index.html` define el
-  divisor sobre el Importe según el tipo elegido — `A: 1.21` (Factura, 21% IVA), `B: 1` (NOF,
-  importe completo), `A/B: 1.105` (mixto, la mitad de 21% = 10,5%). CHR es comisión $0 fija, sin
-  divisor. Validado contra datos reales de agosto 2026 (cierra exacto a la fracción de peso). Si
-  algún día cambia el criterio de alguno de estos tipos, hay que actualizar esa constante — no está
-  en ningún otro lado.
+- **Resolver/reclasificar comisiones en la app** (11-sep-2026): `TIPO_DIVISOR` en `index.html`
+  define el divisor sobre el Importe según el tipo elegido — `A: 1.21` (Factura, 21% IVA), `B: 1`
+  (NOF, importe completo), `A/B: 1.105` (mixto, la mitad de 21% = 10,5%). CHR es comisión $0 fija,
+  sin divisor. Validado contra datos reales de agosto 2026 (cierra exacto a la fracción de peso).
+  Si algún día cambia el criterio de alguno de estos tipos, hay que actualizar esa constante — no
+  está en ningún otro lado. El modal unificado (`verComisionVendedor`) permite tanto resolver una
+  fila "sin comisión" (pasa a `liquidacion_detalle`) como reclasificar o **revertir** una ya
+  resuelta (vuelve a `liquidacion_sin_comision`, reconstruyendo el motivo) — todo por
+  `guardarCambiosComision`, que solo escribe las filas realmente tocadas (compara `current` vs
+  `original` en `COMISION_CTX`).
 - **"Ruben" en el formato nuevo**: la planilla pulida ya no distingue "Ruben (7,5%)" de
   "Ruben (10%)" por nombre — solo dice "Ruben", y la tasa real va en la columna Tasa de cada fila.
   `resolveVendorName()` matchea automáticamente contra los dos vendedores existentes según esa tasa
