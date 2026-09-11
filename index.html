@@ -203,7 +203,7 @@ document.getElementById('lp').addEventListener('keydown',e=>{if(e.key==='Enter')
 function doLogout(){CU=null;document.getElementById('app-screen').classList.add('hidden');document.getElementById('login-screen').classList.remove('hidden');document.getElementById('lp').value='';}
 
 function bNav(){
-  const tabs=[{id:'cargar',label:'Cargar Liquidación'},{id:'historial',label:'Historial'},{id:'reporte',label:'Reporte por Cliente'},{id:'vendedores',label:'Vendedores'},{id:'implementaciones',label:'Implementaciones'}];
+  const tabs=[{id:'cargar',label:'Cargar Liquidación'},{id:'historial',label:'Historial'},{id:'reporte',label:'Reporte por Cliente'},{id:'excluidos',label:'Excluidos'},{id:'vendedores',label:'Vendedores'},{id:'implementaciones',label:'Implementaciones'}];
   document.getElementById('nav-tabs').innerHTML=tabs.map(t=>'<button class="nav-tab" id="tab-'+t.id+'" onclick="sTab(\''+t.id+'\')">'+t.label+'</button>').join('');
   rImplBadge();
 }
@@ -213,6 +213,7 @@ function sTab(tab){
   if(tab==='cargar')rCargarTab();
   else if(tab==='historial')rHistorialTab();
   else if(tab==='reporte')rReporteTab();
+  else if(tab==='excluidos')rExcluidosTab();
   else if(tab==='vendedores')rVendedoresTab();
   else if(tab==='implementaciones')rImplTab();
 }
@@ -586,11 +587,10 @@ function badgeResumenGrupos(r){
 async function verLiquidacion(id){
   document.getElementById('mc').innerHTML='<div class="loading">Cargando...</div>';
   try{
-    const [liqs,detalle,sinComision,excluidos,grupos]=await Promise.all([
+    const [liqs,detalle,sinComision,grupos]=await Promise.all([
       sbFetch('liquidaciones?id=eq.'+id+'&select=*'),
       sbFetch('liquidacion_detalle?liquidacion_id=eq.'+id+'&select=*&order=vendedor_nombre.asc,cliente.asc'),
       sbFetch('liquidacion_sin_comision?liquidacion_id=eq.'+id+'&select=*&order=vendedor_nombre.asc'),
-      sbFetch('liquidacion_excluidos?liquidacion_id=eq.'+id+'&select=*&order=cliente.asc'),
       sbFetch('liquidacion_vendedores?liquidacion_id=eq.'+id+'&select=*'),
     ]);
     const liq=liqs[0];
@@ -646,9 +646,6 @@ async function verLiquidacion(id){
         <tr class="total-row"><td>TOTAL</td><td></td><td>${totales.cantCom}</td><td>${fmt(totales.base)}</td><td>${fmt(totales.comision)}</td><td>${totales.cantRev}</td><td>${fmt(totales.baseRev)}</td><td></td><td></td><td></td></tr>
       </tbody></table></div>
 
-      <h3 style="font-size:15px;font-weight:600;margin:20px 0 10px">Excluidos (${excluidos.length})</h3>
-      <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Cliente</th><th>Motivo</th><th>Empresa</th><th>Fecha</th><th>N° Pago</th><th>Importe</th></tr></thead>
-      <tbody>${excluidos.length===0?'<tr><td colspan="6" class="small" style="white-space:normal">Sin filas.</td></tr>':excluidos.map(r=>'<tr><td>'+esc(r.cliente)+'</td><td>'+esc(r.motivo)+'</td><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+fmt(r.importe)+'</td></tr>').join('')}</tbody></table></div>
     `;
   }catch(e){document.getElementById('mc').innerHTML='<div class="loading" style="color:#c00">Error: '+esc(e.message)+'</div>';}
 }
@@ -902,6 +899,68 @@ async function rReporteContent(){
         <div id="${gid}" class="hidden" style="margin-top:12px">
           <div class="table-wrap"><table><thead><tr><th>Vendedor</th><th>Empresa</th><th>Fecha</th><th>N° Pago</th><th>Tipo</th><th>N° Doc.</th><th>Importe Pago</th><th>Base Comis.</th><th>Comisión</th></tr></thead>
           <tbody>${d.rows.map(r=>'<tr><td>'+esc(r.vendedor_nombre)+'</td><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+esc(r.tipo_doc)+'</td><td>'+esc(r.nro_documento)+'</td><td>'+fmt(r.importe_pago)+'</td><td>'+fmt(r.base_comisionable)+'</td><td>'+fmt(r.comision_a_pagar)+'</td></tr>').join('')}</tbody></table></div>
+        </div>
+      </div>`;
+    }).join('');
+  }catch(e){el.innerHTML='<div class="alert alert-red">Error: '+esc(e.message)+'</div>';}
+}
+
+// ============================================================
+// TAB: EXCLUIDOS
+// ============================================================
+async function rExcluidosTab(){
+  document.getElementById('mc').innerHTML='<div class="loading">Cargando...</div>';
+  try{
+    const liqs=await sbFetch('liquidaciones?select=*&order=anio.desc,mes.desc');
+    DB.liquidaciones=liqs;
+    document.getElementById('mc').innerHTML=`
+      <h2 class="section-title">Excluidos</h2>
+      <p class="small" style="margin-bottom:16px">Pagos de clientes sin vendedor asignado o con etiqueta "Venta Propia" — no generan comisión para nadie.</p>
+      <div class="card" style="margin-bottom:20px;display:flex;gap:12px;align-items:end;flex-wrap:wrap">
+        <div class="form-group" style="min-width:220px;margin-bottom:0"><label>Período</label>
+          <select id="exc-liq" onchange="rExcluidosContent()">
+            <option value="todos">Todos los períodos</option>
+            ${liqs.map(l=>'<option value="'+l.id+'">'+MESES[l.mes-1]+' '+l.anio+'</option>').join('')}
+          </select>
+        </div>
+        <div class="form-group" style="min-width:200px;margin-bottom:0"><label>Buscar cliente</label><input id="exc-filtro" oninput="rExcluidosContent()" placeholder="Nombre de cliente..."></div>
+      </div>
+      <div id="exc-content"></div>
+    `;
+    rExcluidosContent();
+  }catch(e){document.getElementById('mc').innerHTML='<div class="loading" style="color:#c00">Error: '+esc(e.message)+'</div>';}
+}
+async function rExcluidosContent(){
+  const sel=document.getElementById('exc-liq').value;
+  const filtro=normKey(document.getElementById('exc-filtro').value);
+  const el=document.getElementById('exc-content');
+  el.innerHTML='<div class="loading">Cargando...</div>';
+  try{
+    const query=sel==='todos'?'liquidacion_excluidos?select=*':'liquidacion_excluidos?select=*&liquidacion_id=eq.'+sel;
+    const rows=await sbFetch(query+'&order=cliente.asc');
+    const porCliente={};
+    rows.forEach(r=>{
+      if(filtro&&!normKey(r.cliente).includes(filtro))return;
+      const key=r.cliente||'(sin cliente)';
+      if(!porCliente[key])porCliente[key]={rows:[],importe:0,motivos:new Set(),empresas:new Set()};
+      porCliente[key].rows.push(r);
+      porCliente[key].importe+=r.importe;
+      porCliente[key].motivos.add(r.motivo);porCliente[key].empresas.add(r.empresa);
+    });
+    const clientes=Object.keys(porCliente).sort();
+    if(!clientes.length){el.innerHTML='<p class="small">Sin resultados.</p>';return;}
+    const totalGeneral=clientes.reduce((a,c)=>a+porCliente[c].importe,0);
+    el.innerHTML='<p class="small" style="margin-bottom:12px">Total excluido: <b>'+fmt(totalGeneral)+'</b></p>'+clientes.map(c=>{
+      const d=porCliente[c];
+      const gid='exc-'+c.replace(/[^a-z0-9]/gi,'_');
+      return `<div class="card" style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="document.getElementById('${gid}').classList.toggle('hidden')">
+          <div><b>${esc(c)}</b> <span class="small">— ${[...d.motivos].map(esc).join(', ')} · ${[...d.empresas].map(esc).join(', ')}</span></div>
+          <div style="display:flex;gap:16px;font-size:13px"><span>${d.rows.length} pagos</span><span><b>${fmt(d.importe)}</b></span></div>
+        </div>
+        <div id="${gid}" class="hidden" style="margin-top:12px">
+          <div class="table-wrap"><table><thead><tr><th>Motivo</th><th>Empresa</th><th>Fecha</th><th>N° Pago</th><th>Importe</th></tr></thead>
+          <tbody>${d.rows.map(r=>'<tr><td>'+esc(r.motivo)+'</td><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+fmt(r.importe)+'</td></tr>').join('')}</tbody></table></div>
         </div>
       </div>`;
     }).join('');

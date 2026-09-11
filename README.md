@@ -69,7 +69,10 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
    solo para ver de un vistazo qué comisiones del mes ya se transfirieron. Se puede revertir.
 5. **Reporte por Cliente** agrupa todo el detalle (de liquidaciones aprobadas, o de un mes puntual)
    por cliente.
-6. **Implementaciones** es un buzón de pedidos de mejora (mismo patrón que Hemkam-Laura y "Carga de
+6. **Excluidos** agrupa por cliente los pagos sin vendedor asignado o "Venta Propia" (con selector
+   de período), en vez de mostrarse dentro del detalle de cada liquidación como antes — no aporta
+   nada ahí (casi siempre vacío en el formato nuevo) y molestaba en la vista principal.
+7. **Implementaciones** es un buzón de pedidos de mejora (mismo patrón que Hemkam-Laura y "Carga de
    cheques con CP"): cualquiera anota una idea, queda en "Pendientes", y se marca "Realizado" cuando
    se hace.
 
