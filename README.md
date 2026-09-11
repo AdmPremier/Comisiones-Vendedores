@@ -55,7 +55,8 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
    completo**: cada vendedor con actividad ese mes tiene su propio Aprobar/Rechazar (con motivo) en
    la tabla de Resumen, así un caso puntual (ej. un cheque rechazado a confirmar) no frena a los
    demás. Hay un atajo "Aprobar todos los pendientes de un saque" para el caso común de aprobar
-   todo junto.
+   todo junto. El botón **"Ver"** de cada fila abre el detalle de los pagos que forman esa
+   comisión puntual (filtrado por vendedor, en vez de una única tabla plana con los 17 mezclados).
 4. Al aprobar el grupo de un vendedor, su comisión de ese mes pasa a sumar en su cuenta corriente
    (pestaña **Vendedores**), donde se pueden registrar los pagos reales que se le hacen. Además, una
    vez aprobado, aparece un botón **"Marcar pagada"** (badge violeta) — es una marca visual
