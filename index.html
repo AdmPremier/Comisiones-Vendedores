@@ -138,6 +138,7 @@ async function sbFetch(path,opts={}){
 // ============================================================
 function esc(s){return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function fmt(n){return new Intl.NumberFormat('es-AR',{style:'currency',currency:'ARS',maximumFractionDigits:2}).format(n||0);}
+function fmtOpt(n){return n==null?'—':fmt(n);}
 function pad2(n){return String(n).padStart(2,'0');}
 function normKey(s){return (s==null?'':String(s)).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,' ').trim();}
 function parseNum(v){
@@ -233,10 +234,15 @@ function findSheetName(wb,keywords){
   }
   return null;
 }
-// Columnas por posición (0-based), según el orden documentado en el spec funcional.
-const COLS_DETALLE=['vendedor','empresa','fecha','cliente','nro_pago','tipo_doc','nro_documento','importe_pago','neto_documento','total_documento','base_comisionable','pct_comision','comision_a_pagar'];
+// Columnas por posición (0-based). Formato viejo (4 hojas: Detalle - Comisión Calculada /
+// Sin Comisión - Revisar / Excluidos) — se mantiene por si alguna vez vuelve a aparecer.
+const COLS_DETALLE_V1=['vendedor','empresa','fecha','cliente','nro_pago','tipo_doc','nro_documento','importe_pago','neto_documento','total_documento','base_comisionable','pct_comision','comision_a_pagar'];
 const COLS_SIN_COMISION=['vendedor','empresa','fecha','cliente','nro_pago','motivo','importe','aplica'];
 const COLS_EXCLUIDOS=['cliente','motivo','empresa','fecha','nro_pago','importe'];
+// Formato nuevo (7-sep-2026 en adelante): una sola hoja "Detalle" ya pulida a mano por Diego,
+// sin hojas separadas de Sin Comisión/Excluidos. "Comision" en blanco = todavía sin definir
+// (va a la sección "a revisar"); "Comision" = 0 es un valor real (ej. cheque rechazado, "CHR").
+const COLS_DETALLE_V2=['vendedor','empresa','fecha','cliente','nro_pago','importe','documento','tasa','donde_se_liquida','tipo_ab','comision'];
 
 function sheetRows(ws){
   // header:1 -> array de arrays; nos independiza de cómo estén tipeados los encabezados reales.
@@ -274,18 +280,36 @@ function normalizePct(v){
 
 let PARSED=null; // { detalle:[], sinComision:[], excluidos:[], sheetsFound:{...} }
 
+function resolveVendorName(nombreCrudo,tasaCruda){
+  // "Ruben" sin aclarar tasa (formato nuevo): matchea contra "Ruben (7,5%)"/"Ruben (10%)" según
+  // la columna Tasa de esa fila puntual — cada vendedor conserva su cuenta corriente separada.
+  const nombre=String(nombreCrudo||'').trim();
+  if(normKey(nombre)!=='ruben')return nombre;
+  const tasaPct=normalizePct(tasaCruda);
+  const candidatos=DB.vendedores.filter(v=>normKey(v.nombre_mostrar).startsWith('ruben'));
+  const match=candidatos.find(v=>Math.abs(v.pct_comision-tasaPct)<0.01);
+  return match?match.nombre_mostrar:nombre;
+}
+
 function parseWorkbook(wb){
   const detSheet=findSheetName(wb,SHEET_KEYWORDS.detalle);
   const scSheet=findSheetName(wb,SHEET_KEYWORDS.sinComision);
   const excSheet=findSheetName(wb,SHEET_KEYWORDS.excluidos);
-  if(!detSheet)throw new Error('No encontré la hoja "Detalle - Comisión Calculada" en el Excel. Hojas disponibles: '+wb.SheetNames.join(', '));
+  if(!detSheet)throw new Error('No encontré la hoja "Detalle" en el Excel. Hojas disponibles: '+wb.SheetNames.join(', '));
 
-  const detalleRaw=mapRows(sheetRows(wb.Sheets[detSheet]),COLS_DETALLE,'Vendedor');
+  // Si aparece una hoja separada de Sin Comisión o Excluidos, es el formato viejo (4 hojas).
+  // Si no, es el formato nuevo (una sola hoja "Detalle" ya pulida a mano).
+  if(scSheet||excSheet)return parseWorkbookV1(wb,detSheet,scSheet,excSheet);
+  return parseWorkbookV2(wb,detSheet);
+}
+
+function parseWorkbookV1(wb,detSheet,scSheet,excSheet){
+  const detalleRaw=mapRows(sheetRows(wb.Sheets[detSheet]),COLS_DETALLE_V1,'Vendedor');
   const sinComisionRaw=scSheet?mapRows(sheetRows(wb.Sheets[scSheet]),COLS_SIN_COMISION,'Vendedor'):[];
   const excluidosRaw=excSheet?mapRows(sheetRows(wb.Sheets[excSheet]),COLS_EXCLUIDOS,'Cliente'):[];
 
   const detalle=detalleRaw.map(r=>({
-    vendedor_nombre:String(r.vendedor||'').trim(),
+    vendedor_nombre:resolveVendorName(r.vendedor,r.pct_comision),
     empresa:String(r.empresa||'').trim(),
     fecha_pago:parseFechaCell(r.fecha),
     cliente:String(r.cliente||'').trim(),
@@ -320,7 +344,44 @@ function parseWorkbook(wb){
     importe:parseNum(r.importe)
   })).filter(r=>r.cliente||r.motivo);
 
-  return {detalle,sinComision,excluidos,sheetsFound:{detSheet,scSheet,excSheet}};
+  return {detalle,sinComision,excluidos,sheetsFound:{detSheet,scSheet,excSheet,formatVersion:'v1'}};
+}
+
+function parseWorkbookV2(wb,detSheet){
+  const rows=mapRows(sheetRows(wb.Sheets[detSheet]),COLS_DETALLE_V2,'Vendedor')
+    .filter(r=>String(r.vendedor||'').trim()||String(r.cliente||'').trim());
+
+  const detalle=[],sinComision=[];
+  rows.forEach(r=>{
+    const vendedor_nombre=resolveVendorName(r.vendedor,r.tasa);
+    const empresa=String(r.empresa||'').trim();
+    const fecha_pago=parseFechaCell(r.fecha);
+    const cliente=String(r.cliente||'').trim();
+    const nro_pago=String(r.nro_pago||'').trim();
+    const documento=String(r.documento||'').trim();
+    const tipoAB=String(r.tipo_ab||'').trim();
+    const pct_comision=normalizePct(r.tasa);
+    const importe_pago=parseNum(r.importe);
+    const sinDefinir=r.comision===''||r.comision==null;
+    if(sinDefinir){
+      sinComision.push({vendedor_nombre,empresa,fecha_pago,cliente,nro_pago,motivo:'Comisión sin definir todavía'+(documento?' — '+documento:''),importe:importe_pago,aplica:tipoAB});
+    }else{
+      const comision_a_pagar=parseNum(r.comision);
+      detalle.push({
+        vendedor_nombre,empresa,fecha_pago,cliente,nro_pago,
+        tipo_doc:tipoAB,
+        nro_documento:documento,
+        importe_pago,
+        neto_documento:null,
+        total_documento:null,
+        base_comisionable:pct_comision>0?comision_a_pagar/(pct_comision/100):0,
+        pct_comision,
+        comision_a_pagar
+      });
+    }
+  });
+
+  return {detalle,sinComision,excluidos:[],sheetsFound:{detSheet,scSheet:null,excSheet:null,formatVersion:'v2'}};
 }
 
 function inferPeriodo(parsed){
@@ -343,7 +404,7 @@ function rCargarTab(){
   document.getElementById('mc').innerHTML=`
     <h2 class="section-title">Cargar Liquidación Mensual</h2>
     <div class="card">
-      <p class="small" style="margin-bottom:16px">Subí el Excel que genera la tarea programada (4 hojas: Resumen, Detalle, Sin Comisión, Excluidos). Se muestra una vista previa antes de guardar nada.</p>
+      <p class="small" style="margin-bottom:16px">Subí el Excel de liquidación mensual (hoja "Detalle" con la comisión de cada pago ya definida — dejá en blanco la columna Comisión en los casos todavía sin resolver, van a la sección "a revisar"). Se muestra una vista previa antes de guardar nada.</p>
       <div style="display:flex;gap:12px;margin-bottom:16px">
         <div class="form-group" style="flex:1"><label>Mes que se liquida</label>
           <select id="carga-mes">${MESES.map((m,i)=>'<option value="'+(i+1)+'"'+(i+1===mesDefault?' selected':'')+'>'+m+'</option>').join('')}</select>
@@ -396,11 +457,14 @@ function renderCargaPreview(){
   const totalBase=detalle.reduce((a,r)=>a+r.base_comisionable,0);
 
   let warns='';
-  if(!sheetsFound.scSheet)warns+='<div class="alert alert-amber">No encontré la hoja "Sin Comisión - Revisar" — se guardará vacía.</div>';
-  if(!sheetsFound.excSheet)warns+='<div class="alert alert-amber">No encontré la hoja "Excluidos" — se guardará vacía.</div>';
+  if(sheetsFound.formatVersion==='v1'){
+    if(!sheetsFound.scSheet)warns+='<div class="alert alert-amber">No encontré la hoja "Sin Comisión - Revisar" — se guardará vacía.</div>';
+    if(!sheetsFound.excSheet)warns+='<div class="alert alert-amber">No encontré la hoja "Excluidos" — se guardará vacía.</div>';
+  }
   if(desconocidos.length)warns+='<div class="alert alert-red">Vendedor(es) en el Excel que no están en la tabla de vendedores: <b>'+desconocidos.map(esc).join(', ')+'</b>. Revisá el nombre exacto o agregalo en la tabla <code>vendedores</code> antes de confirmar (si confirmás igual, sus comisiones se guardan pero no van a sumar en la cuenta corriente hasta que coincida el nombre).</div>';
 
   prevEl.innerHTML=`
+    <p class="small">Formato detectado: ${sheetsFound.formatVersion==='v2'?'nuevo (una hoja "Detalle" pulida a mano)':'viejo (4 hojas)'}</p>
     ${warns}
     <div class="grid4" style="margin:16px 0">
       <div class="metric"><div class="metric-label">Pagos comisionados</div><div class="metric-value">${detalle.length}</div></div>
@@ -578,7 +642,7 @@ async function verLiquidacion(id){
 
       <h3 style="font-size:15px;font-weight:600;margin:20px 0 10px">Detalle — Comisión Calculada (${detalle.length})</h3>
       <div class="table-wrap" style="margin-bottom:20px;max-height:420px;overflow-y:auto"><table><thead><tr><th>Vendedor</th><th>Empresa</th><th>Fecha</th><th>Cliente</th><th>N° Pago</th><th>Tipo</th><th>N° Doc.</th><th>Importe Pago</th><th>Neto Doc.</th><th>Total Doc.</th><th>Base Comis.</th><th>%</th><th>Comisión</th></tr></thead>
-      <tbody>${detalle.length===0?'<tr><td colspan="13" class="small" style="white-space:normal">Sin filas.</td></tr>':detalle.map(r=>'<tr><td>'+esc(r.vendedor_nombre)+'</td><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.cliente)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+esc(r.tipo_doc)+'</td><td>'+esc(r.nro_documento)+'</td><td>'+fmt(r.importe_pago)+'</td><td>'+fmt(r.neto_documento)+'</td><td>'+fmt(r.total_documento)+'</td><td>'+fmt(r.base_comisionable)+'</td><td>'+r.pct_comision+'%</td><td>'+fmt(r.comision_a_pagar)+'</td></tr>').join('')}</tbody></table></div>
+      <tbody>${detalle.length===0?'<tr><td colspan="13" class="small" style="white-space:normal">Sin filas.</td></tr>':detalle.map(r=>'<tr><td>'+esc(r.vendedor_nombre)+'</td><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.cliente)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+esc(r.tipo_doc)+'</td><td>'+esc(r.nro_documento)+'</td><td>'+fmt(r.importe_pago)+'</td><td>'+fmtOpt(r.neto_documento)+'</td><td>'+fmtOpt(r.total_documento)+'</td><td>'+fmt(r.base_comisionable)+'</td><td>'+r.pct_comision+'%</td><td>'+fmt(r.comision_a_pagar)+'</td></tr>').join('')}</tbody></table></div>
 
       <h3 style="font-size:15px;font-weight:600;margin:20px 0 10px">Sin Comisión — Revisar (${sinComision.length})</h3>
       <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Vendedor</th><th>Empresa</th><th>Fecha</th><th>Cliente</th><th>N° Pago</th><th>Motivo</th><th>Importe</th><th>Aplica</th></tr></thead>

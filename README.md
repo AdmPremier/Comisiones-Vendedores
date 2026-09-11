@@ -41,8 +41,14 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
 
 ## Flujo mensual
 
-1. Bajar el Excel del chat de la tarea programada (4 hojas: Resumen, Detalle - Comisión Calculada,
-   Sin Comisión - Revisar, Excluidos).
+1. Bajar el Excel del chat de la tarea programada de Claude, y pulirlo a mano (resolver los casos
+   que la automatización no puede clasificar sola — cheques rechazados, saldos de migración, etc.)
+   dejando una sola hoja **"Detalle"** con todo: `Vendedor | Empresa | Fecha | Cliente | N° de Pago |
+   Importe | Factura/NOF | Tasa | Donde se liquida | A o B | Comision`. Una fila sin nada en
+   "Comision" (en blanco) significa "todavía sin definir" — esas van solas a "Sin Comisión -
+   Revisar" en la app. Un 0 en "Comision" es un valor real (ej. un cheque rechazado) y sí se
+   importa a Detalle, visible con $0. (El formato viejo de 4 hojas también se sigue soportando,
+   por compatibilidad — ver notas más abajo.)
 2. En la app, pestaña **Cargar Liquidación** → elegir mes/año (se autodetecta según las fechas del
    archivo) → subir el Excel → revisar el preview → **Confirmar y guardar**.
 3. En **Historial**, abrir la liquidación cargada. La aprobación es **por vendedor, no por mes
@@ -63,13 +69,18 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
 
 ## Notas de diseño / pendientes conocidos
 
-- El parseo del Excel es **posicional** (toma las columnas por orden, no por el texto exacto del
-  encabezado) porque el archivo lo genera siempre el mismo proceso automatizado. Si el orden de
-  columnas de esa tarea programada cambia alguna vez, hay que actualizar `COLS_DETALLE`,
-  `COLS_SIN_COMISION` y `COLS_EXCLUIDOS` en `index.html`. La fila de encabezado se ubica buscando el
-  texto ("Vendedor" o "Cliente" según la hoja), no por posición fija — así no importa si el Excel
-  trae o no una fila de título arriba (el real trae una en "Detalle", el spec original no la
-  mencionaba).
+- **Dos formatos de Excel soportados** (`parseWorkbook` en `index.html` detecta cuál es): si
+  encuentra una hoja separada de "Sin Comisión"/"Excluidos" usa el parser viejo (`COLS_DETALLE_V1`,
+  4 hojas); si no, asume el formato nuevo de una sola hoja "Detalle" (`COLS_DETALLE_V2`,
+  11-sep-2026 en adelante). El parseo es **posicional** en ambos casos (columnas por orden, no por
+  texto exacto de encabezado) — si Diego cambia el orden de columnas de su planilla pulida, hay que
+  actualizar `COLS_DETALLE_V2`. La fila de encabezado se ubica buscando el texto ("Vendedor" o
+  "Cliente" según la hoja), no por posición fija, así no importa si hay una fila de título arriba.
+- **"Ruben" en el formato nuevo**: la planilla pulida ya no distingue "Ruben (7,5%)" de
+  "Ruben (10%)" por nombre — solo dice "Ruben", y la tasa real va en la columna Tasa de cada fila.
+  `resolveVendorName()` matchea automáticamente contra los dos vendedores existentes según esa tasa
+  (con ±0.01 de tolerancia). Si alguna vez aparece una fila de Ruben con una tasa que no sea 7.5%
+  ni 10%, va a quedar como "Ruben" sin resolver — el preview de carga lo marca en rojo.
 - La columna **"% Comisión"** del Excel real viene como fracción (0.05 = 5%), no como "5" —
   `normalizePct()` en `index.html` lo detecta y convierte (cualquier valor ≤1 se multiplica ×100).
 - La hoja "Sin Comisión - Revisar" real trae una columna extra, **"Aplica"** (valores como 50/50,
