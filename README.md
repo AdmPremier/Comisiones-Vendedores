@@ -101,6 +101,14 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
   "Sin Comisión", y la versión pulida a mano llegaba a 13). Si el encabezado no se reconoce, cae al
   mapeo posicional. Las filas TOTAL se ignoran en las tres hojas, y el preview avisa si hay pagos
   con importe $0 (señal de columnas corridas).
+- **Historial como pantalla inicial, con indicadores y gráficos** (7-oct-2026): al loguearse se
+  abre Historial. Arriba tres indicadores (pendiente de aprobar / aprobado a pagar = aprobado −
+  pagos registrados / pagado), después la tabla de liquidaciones y abajo un gráfico de barras con la
+  comisión de cada mes, apilado por estado del vendedor (pendiente, aprobada, pagada, rechazada).
+  Al tocar una barra, la dona de la derecha muestra el reparto por vendedor de ese mes (los de menos
+  del 3% se agrupan como "Otros" en la dona; la lista muestra a todos con importe, % y estado).
+  Usa Chart.js 4.4.1 desde cdnjs (`calcHistorialMeses`, `dibujarGraficosHistorial` en `index.html`).
+  El indicador "aprobado a pagar" se pone en rojo si un vendedor cobró más de lo aprobado.
 - **Pagos a vendedores editables** (7-oct-2026): en la pestaña Vendedores → detalle de un vendedor,
   cada pago registrado tiene **Editar** (fecha, importe, nota) y **Eliminar** (con confirmación); el
   saldo se recalcula solo. El importe del formulario acepta el formato argentino (`27.812` = 27812,

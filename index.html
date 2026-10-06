@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Comisiones de Vendedores</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Segoe UI',system-ui,sans-serif;font-size:15px;color:#1a1a1a;background:#f5f5f5;min-height:100vh}
@@ -72,6 +73,17 @@ tr.total-row td{font-weight:700;border-top:2px solid #ddd;background:#fafafa}
 .saldo-zero{color:#888;font-weight:700}
 .small{font-size:12px;color:#888}
 .link{color:#1565c0;cursor:pointer;text-decoration:underline}
+.kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
+.hist-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:20px}
+.chart-box{position:relative;height:300px}
+.dona-wrap{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.dona-canvas{position:relative;width:190px;height:190px;flex:none}
+.dona-lista{flex:1;min-width:190px;max-height:250px;overflow-y:auto;font-size:13px}
+.dona-item{display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #f0f0f0}
+.dona-item:last-child{border-bottom:none}
+.dona-dot{width:10px;height:10px;border-radius:50%;flex:none}
+@media(max-width:820px){.hist-grid{grid-template-columns:1fr}}
+@media(max-width:600px){.kpi-grid{grid-template-columns:1fr}}
 .impl-card{background:#fff;border:1px solid #e0e0e0;border-radius:8px;padding:16px 20px;margin-bottom:10px}
 .impl-card-realizada{background:#f9f9f9;border:1px solid #e8e8e8;opacity:0.7}
 .impl-nombre{font-size:11px;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px}
@@ -196,14 +208,14 @@ function doLogin(){
     document.getElementById('app-screen').classList.remove('hidden');
     document.getElementById('nav-user').textContent=CU.label;
     bNav();
-    loadVendedores().then(()=>sTab('cargar')).catch(e=>{document.getElementById('mc').innerHTML='<div class="loading" style="color:#c00">Error: '+esc(e.message)+'</div>';});
+    loadVendedores().then(()=>sTab('historial')).catch(e=>{document.getElementById('mc').innerHTML='<div class="loading" style="color:#c00">Error: '+esc(e.message)+'</div>';});
   }else{err.classList.remove('hidden');err.textContent='Usuario o contraseña incorrectos';}
 }
 document.getElementById('lp').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
 function doLogout(){CU=null;document.getElementById('app-screen').classList.add('hidden');document.getElementById('login-screen').classList.remove('hidden');document.getElementById('lp').value='';}
 
 function bNav(){
-  const tabs=[{id:'cargar',label:'Cargar Liquidación'},{id:'historial',label:'Historial'},{id:'reporte',label:'Reporte por Cliente'},{id:'excluidos',label:'Excluidos'},{id:'vendedores',label:'Vendedores'},{id:'implementaciones',label:'Implementaciones'}];
+  const tabs=[{id:'historial',label:'Historial'},{id:'cargar',label:'Cargar Liquidación'},{id:'reporte',label:'Reporte por Cliente'},{id:'excluidos',label:'Excluidos'},{id:'vendedores',label:'Vendedores'},{id:'implementaciones',label:'Implementaciones'}];
   document.getElementById('nav-tabs').innerHTML=tabs.map(t=>'<button class="nav-tab" id="tab-'+t.id+'" onclick="sTab(\''+t.id+'\')">'+t.label+'</button>').join('');
   rImplBadge();
 }
@@ -629,9 +641,11 @@ async function confirmarCarga(){
 async function rHistorialTab(){
   document.getElementById('mc').innerHTML='<div class="loading">Cargando...</div>';
   try{
-    const [liqs,grupos]=await Promise.all([
+    const [liqs,grupos,detalle,pagos]=await Promise.all([
       sbFetch('liquidaciones?select=*&order=anio.desc,mes.desc'),
-      sbFetch('liquidacion_vendedores?select=liquidacion_id,estado'),
+      sbFetch('liquidacion_vendedores?select=liquidacion_id,vendedor_nombre,estado,pagado'),
+      sbFetch('liquidacion_detalle?select=liquidacion_id,vendedor_nombre,comision_a_pagar'),
+      sbFetch('pagos_vendedor?select=importe'),
     ]);
     DB.liquidaciones=liqs;
     const resumenPorLiq={};
@@ -639,8 +653,15 @@ async function rHistorialTab(){
       if(!resumenPorLiq[g.liquidacion_id])resumenPorLiq[g.liquidacion_id]={pendiente:0,aprobada:0,rechazada:0};
       resumenPorLiq[g.liquidacion_id][g.estado]++;
     });
+    HIST_MESES=calcHistorialMeses(liqs,grupos,detalle);
+    const kpi=calcKpisHistorial(HIST_MESES,pagos);
     document.getElementById('mc').innerHTML=`
       <h2 class="section-title">Historial de Liquidaciones</h2>
+      <div class="kpi-grid">
+        <div class="metric"><div class="metric-label">Pendiente de aprobar</div><div class="metric-value" style="color:#f57f17">${fmt(kpi.pendiente)}</div></div>
+        <div class="metric"><div class="metric-label">Aprobado a pagar</div><div class="metric-value" style="color:${kpi.aPagar<0?'#c62828':'#2a7a0a'}">${fmt(kpi.aPagar)}</div><div class="small">aprobado ${fmt(kpi.aprobado)} − pagado ${fmt(kpi.pagado)}</div></div>
+        <div class="metric"><div class="metric-label">Pagado (pagos registrados)</div><div class="metric-value" style="color:#6a1b9a">${fmt(kpi.pagado)}</div></div>
+      </div>
       <div class="table-wrap"><table><thead><tr><th>Período</th><th>Estado (por vendedor)</th><th>Cargado por</th><th>Fecha de carga</th><th></th></tr></thead>
       <tbody>${liqs.length===0?'<tr><td colspan="5" class="small" style="white-space:normal">Todavía no se cargó ninguna liquidación.</td></tr>':liqs.map(l=>`
         <tr style="cursor:pointer" onclick="verLiquidacion(${l.id})">
@@ -650,8 +671,144 @@ async function rHistorialTab(){
           <td>${new Date(l.created_at).toLocaleDateString('es-AR')}</td>
           <td><button onclick="event.stopPropagation();verLiquidacion(${l.id})">Ver →</button></td>
         </tr>`).join('')}</tbody></table></div>
+      ${HIST_MESES.length===0?'':`
+      <div class="hist-grid">
+        <div class="card">
+          <div style="font-size:13px;font-weight:600;margin-bottom:2px;color:#666">COMISIÓN POR MES</div>
+          <div class="small" style="margin-bottom:8px">Tocá una barra para ver cómo se reparte entre los vendedores.</div>
+          <div class="chart-box"><canvas id="chart-barras"></canvas></div>
+        </div>
+        <div class="card">
+          <div id="dona-titulo" style="font-size:13px;font-weight:600;margin-bottom:2px;color:#666"></div>
+          <div id="dona-sub" class="small" style="margin-bottom:8px"></div>
+          <div class="dona-wrap">
+            <div class="dona-canvas"><canvas id="chart-dona"></canvas></div>
+            <div id="dona-lista" class="dona-lista"></div>
+          </div>
+        </div>
+      </div>`}
     `;
+    if(HIST_MESES.length)dibujarGraficosHistorial();
   }catch(e){document.getElementById('mc').innerHTML='<div class="loading" style="color:#c00">Error: '+esc(e.message)+'</div>';}
+}
+
+// ---- Gráficos del Historial ----
+let HIST_MESES=[],HIST_SEL=0,CH_BARRAS=null,CH_DONA=null;
+const COLOR_ESTADO={pendiente:'#ffb74d',aprobada:'#66bb6a',pagada:'#ba68c8',rechazada:'#ef5350'};
+const TEXTO_ESTADO={pendiente:'#f57f17',aprobada:'#2a7a0a',pagada:'#6a1b9a',rechazada:'#c62828'};
+const NOMBRE_ESTADO={pendiente:'Pendiente',aprobada:'Aprobada',pagada:'Pagada',rechazada:'Rechazada'};
+const PALETA_DONA=['#1976d2','#e64a19','#388e3c','#7b1fa2','#fbc02d','#0097a7','#c2185b','#5d4037','#455a64','#afb42b','#00796b','#d84315'];
+
+// Un elemento por liquidación (orden cronológico) con su comisión total, partida por estado del
+// grupo del vendedor (pendiente / aprobada / pagada / rechazada) y por vendedor.
+function calcHistorialMeses(liqs,grupos,detalle){
+  const estadoGrupo={};
+  grupos.forEach(g=>{estadoGrupo[g.liquidacion_id+'|'+g.vendedor_nombre]=(g.estado==='aprobada'&&g.pagado)?'pagada':g.estado;});
+  const meses=liqs.slice().sort((a,b)=>a.anio-b.anio||a.mes-b.mes).map(l=>({
+    id:l.id,etiqueta:MESES[l.mes-1].slice(0,3)+' '+String(l.anio).slice(2),titulo:MESES[l.mes-1]+' '+l.anio,
+    porEstado:{pendiente:0,aprobada:0,pagada:0,rechazada:0},porVendedor:{},total:0
+  }));
+  const porId={};meses.forEach(m=>{porId[m.id]=m;});
+  detalle.forEach(r=>{
+    const m=porId[r.liquidacion_id];if(!m)return;
+    const est=estadoGrupo[r.liquidacion_id+'|'+r.vendedor_nombre]||'pendiente';
+    const c=r.comision_a_pagar||0;
+    m.porEstado[est]+=c;m.total+=c;
+    if(!m.porVendedor[r.vendedor_nombre])m.porVendedor[r.vendedor_nombre]={monto:0,estado:est};
+    m.porVendedor[r.vendedor_nombre].monto+=c;
+  });
+  return meses;
+}
+function calcKpisHistorial(meses,pagos){
+  const pendiente=meses.reduce((a,m)=>a+m.porEstado.pendiente,0);
+  const aprobado=meses.reduce((a,m)=>a+m.porEstado.aprobada+m.porEstado.pagada,0);
+  const pagado=pagos.reduce((a,p)=>a+(p.importe||0),0);
+  return {pendiente,aprobado,pagado,aPagar:aprobado-pagado};
+}
+function fmtCorto(v){
+  if(Math.abs(v)>=1e6)return '$ '+(v/1e6).toLocaleString('es-AR',{maximumFractionDigits:1})+' M';
+  if(Math.abs(v)>=1e3)return '$ '+Math.round(v/1e3).toLocaleString('es-AR')+' k';
+  return '$ '+Math.round(v);
+}
+function dibujarGraficosHistorial(){
+  if(typeof Chart==='undefined'){
+    document.getElementById('chart-barras').parentElement.innerHTML='<p class="small">No se pudo cargar la librería de gráficos (revisá la conexión).</p>';
+    return;
+  }
+  if(CH_BARRAS)CH_BARRAS.destroy();
+  if(CH_DONA)CH_DONA.destroy();
+  HIST_SEL=HIST_MESES.length-1; // arranca con el mes más reciente seleccionado
+  const estados=['pendiente','aprobada','pagada','rechazada'];
+  CH_BARRAS=new Chart(document.getElementById('chart-barras'),{
+    type:'bar',
+    data:{
+      labels:HIST_MESES.map(m=>m.etiqueta),
+      datasets:estados.map(e=>({
+        label:NOMBRE_ESTADO[e],data:HIST_MESES.map(m=>m.porEstado[e]),
+        backgroundColor:ctx=>ctx.dataIndex===HIST_SEL?COLOR_ESTADO[e]:COLOR_ESTADO[e]+'66',
+        borderColor:ctx=>ctx.dataIndex===HIST_SEL?'#1a1a1a':'transparent',borderWidth:ctx=>ctx.dataIndex===HIST_SEL?1.5:0,
+        borderSkipped:false,maxBarThickness:56
+      }))
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      scales:{
+        x:{stacked:true,grid:{display:false}},
+        y:{stacked:true,beginAtZero:true,ticks:{callback:v=>fmtCorto(v)}}
+      },
+      plugins:{
+        legend:{position:'bottom',labels:{boxWidth:12,filter:(item,data)=>data.datasets[item.datasetIndex].data.some(v=>v>0)}},
+        tooltip:{callbacks:{
+          title:items=>HIST_MESES[items[0].dataIndex].titulo,
+          label:c=>c.parsed.y>0?' '+c.dataset.label+': '+fmt(c.parsed.y):null,
+          footer:items=>'Total: '+fmt(HIST_MESES[items[0].dataIndex].total)
+        }}
+      },
+      onClick:(evt,els)=>{if(els.length)seleccionarMesHistorial(els[0].index);},
+      onHover:(evt,els)=>{evt.native.target.style.cursor=els.length?'pointer':'default';}
+    }
+  });
+  CH_DONA=new Chart(document.getElementById('chart-dona'),{
+    type:'doughnut',
+    data:{labels:[],datasets:[{data:[],backgroundColor:[],borderWidth:1}]},
+    options:{responsive:true,maintainAspectRatio:false,cutout:'58%',plugins:{legend:{display:false},
+      tooltip:{callbacks:{label:c=>' '+c.label+': '+fmt(c.parsed)}}}}
+  });
+  actualizarDonaHistorial(HIST_SEL);
+}
+function seleccionarMesHistorial(i){
+  HIST_SEL=i;
+  CH_BARRAS.update();
+  actualizarDonaHistorial(i);
+}
+function actualizarDonaHistorial(i){
+  const m=HIST_MESES[i];
+  document.getElementById('dona-titulo').textContent='REPARTO POR VENDEDOR — '+m.titulo.toUpperCase();
+  document.getElementById('dona-sub').textContent='Total del mes: '+fmt(m.total);
+  const lista=document.getElementById('dona-lista');
+  const vend=Object.entries(m.porVendedor).map(([n,v])=>({nombre:n,monto:v.monto,estado:v.estado})).filter(v=>v.monto>0).sort((a,b)=>b.monto-a.monto);
+  if(!vend.length||m.total<=0){
+    CH_DONA.data.labels=[];CH_DONA.data.datasets[0].data=[];CH_DONA.data.datasets[0].backgroundColor=[];CH_DONA.update();
+    lista.innerHTML='<p class="small">Este mes todavía no tiene comisiones calculadas.</p>';
+    return;
+  }
+  // los que pesan menos del 3% se agrupan como "Otros" en la dona (la lista los muestra a todos)
+  const chicos=vend.filter(v=>v.monto/m.total<0.03);
+  const agrupar=chicos.length>=2;
+  const grandes=agrupar?vend.filter(v=>v.monto/m.total>=0.03):vend;
+  const colorDe={};vend.forEach((v,k)=>{colorDe[v.nombre]=PALETA_DONA[k%PALETA_DONA.length];});
+  const labels=grandes.map(v=>v.nombre),data=grandes.map(v=>v.monto),colores=grandes.map(v=>colorDe[v.nombre]);
+  if(agrupar){labels.push('Otros');data.push(chicos.reduce((a,v)=>a+v.monto,0));colores.push('#b0bec5');}
+  CH_DONA.data.labels=labels;CH_DONA.data.datasets[0].data=data;CH_DONA.data.datasets[0].backgroundColor=colores;CH_DONA.update();
+  lista.innerHTML=vend.map(v=>{
+    const enOtros=agrupar&&chicos.includes(v);
+    return '<div class="dona-item"><span class="dona-dot" style="background:'+(enOtros?'#b0bec5':colorDe[v.nombre])+'"></span>'
+      +'<span style="flex:1">'+esc(v.nombre)+'</span>'
+      +'<span class="small" style="color:'+TEXTO_ESTADO[v.estado]+'">'+NOMBRE_ESTADO[v.estado]+'</span>'
+      +'<span style="min-width:96px;text-align:right">'+fmt(v.monto)+'</span>'
+      +'<span class="small" style="min-width:42px;text-align:right">'+(v.monto/m.total*100).toLocaleString('es-AR',{maximumFractionDigits:1})+'%</span></div>';
+  }).join('');
 }
 function badgeEstado(e){
   if(e==='pagada')return '<span class="badge badge-purple">Pagada</span>';
