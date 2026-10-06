@@ -124,6 +124,14 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
   La app la lee por nombre de columna (`parseMediosPago`), la muestra en el preview y la guarda en
   `recibos_pago` al confirmar la carga (`sbUpsert`, por empresa + N° de pago). Si la hoja no está,
   la carga funciona igual y el preview avisa que ese mes no va a mostrar cómo pagó el cliente.
+- **Recibo mostrado por lo que pagó el cliente** (pedido del jefe, oct-2026): si un pago se aplicó a
+  más de un documento o dejó un "remanente", el recibo aparece UNA vez por el importe real de Odoo
+  (`recibos_pago.importe`) con el desglose por documento debajo ("aplicado …"). Es solo presentación
+  (`agruparRecibos`, en Ver del vendedor y en el estado de cuenta): la base y la comisión de cada
+  fila siguen calculándose sobre lo aplicado a su documento, y cada línea conserva su tipo y su tilde
+  (la casilla del recibo tilda/destilda todas sus líneas). Solo se agrupan recibos que existen en
+  `recibos_pago`; los cargados a mano (N° de relleno `RE-X 0001-0000000`) no se agrupan. Pendiente en
+  la tarea programada: no partir el pago en el Excel ni mandar el remanente a "Sin Comisión".
 - **Aviso de versión nueva** (8-oct-2026): barra azul fija arriba cuando hay una versión publicada
   distinta de la cargada (`chequearVersionNueva`, compara el index.html cada 60 s y al volver a la
   pestaña).

@@ -680,6 +680,7 @@ async function confirmarCarga(){
     // medios de pago de los recibos (hoja opcional): se guardan/actualizan por (empresa, N° de pago)
     for(const part of chunk(PARSED.medios||[],200)){
       if(part.length)await sbUpsert('recibos_pago?on_conflict=empresa,nro_pago',part);
+      RECIBOS_CACHE=null;
     }
     PARSED=null;
     sTab('historial');
@@ -1069,6 +1070,11 @@ async function verComisionVendedor(grupoId){
     });
     filas.sort((a,b)=>(COMISION_CTX[a].cliente||'').localeCompare(COMISION_CTX[b].cliente||''));
     const hayAprobables=detRows.length>0;
+    let recibos={};
+    try{recibos=await cargarRecibosPago();}catch(e){/* sin datos de Odoo: se muestra la suma de lo aplicado */}
+    const gruposRec=agruparRecibos(filas.map(key=>({key,empresa:COMISION_CTX[key].empresa,nro_pago:COMISION_CTX[key].nro_pago,aplicado:COMISION_CTX[key].importe})),recibos);
+    gruposRec.forEach((gr,i)=>{gr.items.forEach(it=>{COMISION_CTX[it.key].grp=gr.items.length>1?i:null;});gr.i=i;});
+    COMISION_GRUPOS_REC=gruposRec;
 
     const opcionesTipo=t=>['','A','B','A/B','CHR'].map(v=>'<option value="'+v+'"'+(v===t?' selected':'')+'>'+(v===''?'— Elegir —':v==='A'?'A · Factura':v==='B'?'B · NOF':v==='A/B'?'A/B · Mixto':'CHR · Rechazado')+'</option>').join('');
 
@@ -1079,14 +1085,24 @@ async function verComisionVendedor(grupoId){
           <p class="small" style="margin-bottom:6px"><b>Tildá los recibos que querés aprobar</b>: los tildados suman a la cuenta corriente del vendedor y los que no tildes quedan pendientes. Tocá el número de un recibo para ver cómo pagó el cliente.</p>
           <p class="small" style="margin-bottom:12px">También podés cambiar el Tipo de cualquier fila (es reversible: "— Elegir —" la vuelve a mandar a revisar). No se guarda nada hasta tocar "Guardar cambios".${g.pagado?' <b style="color:#6a1b9a">Este vendedor está marcado como Pagada: para destildar recibos primero revertí esa marca.</b>':''}</p>
           <div class="table-wrap" style="margin-bottom:16px;max-height:420px;overflow-y:auto"><table><thead><tr><th style="text-align:center">${hayAprobables?'<input type="checkbox" id="caprobar-todos" title="Tildar / destildar todos" style="width:auto" onchange="tildarTodosRecibos(this.checked)"><div style="font-size:10px">Aprobar</div>':''}</th><th>Empresa</th><th>Fecha</th><th>Cliente</th><th>Recibo</th><th>Doc. / Motivo</th><th>Importe</th><th>Tipo</th><th>Comisión</th></tr></thead>
-          <tbody>${filas.length===0?'<tr><td colspan="9" class="small" style="white-space:normal">Sin filas.</td></tr>':filas.map(key=>{
-            const c=COMISION_CTX[key];
-            return `<tr id="crow-${key}" style="background:${colorFilaComision(c)}">
+          <tbody>${filas.length===0?'<tr><td colspan="9" class="small" style="white-space:normal">Sin filas.</td></tr>':gruposRec.map(gr=>{
+            const multi=gr.items.length>1;
+            const c0=COMISION_CTX[gr.items[0].key];
+            const cab=multi?`<tr id="chead-${gr.i}" style="background:#f4f6fa;font-weight:600">
+              <td style="text-align:center"><input type="checkbox" id="cheadchk-${gr.i}" style="width:auto" title="Tildar / destildar todo el recibo" onchange="onCambioAprobacionRecibo(${gr.i},this.checked)"></td>
+              <td>${esc(c0.empresa)}</td><td>${fmtFecha(c0.fecha_pago)}</td><td>${esc(c0.cliente)}</td><td>${reciboLink(c0.empresa,c0.nro_pago)}</td>
+              <td class="small" style="font-weight:400;white-space:normal">Pago del cliente, aplicado a ${gr.items.length} conceptos</td><td>${fmt(gr.total)}</td><td></td><td></td></tr>`:'';
+            return cab+gr.items.map(it=>{
+              const key=it.key,c=COMISION_CTX[key];
+              const impCelda=multi?'<span class="small">aplicado </span>'+fmt(c.importe)
+                :fmt(gr.total)+(Math.abs(gr.total-(Number(c.importe)||0))>0.5?'<div class="small">aplicado '+fmt(c.importe)+'</div>':'');
+              return `<tr id="crow-${key}" style="background:${colorFilaComision(c)}">
               <td style="text-align:center">${c.origin==='detalle'?`<input type="checkbox" id="caprob-${key}" style="width:auto" ${c.aprobC?'checked':''} onchange="onCambioAprobacion('${key}')">`:'<span class="small" title="Sin comisión definida: no se puede aprobar todavía">—</span>'}</td>
-              <td>${esc(c.empresa)}</td><td>${fmtFecha(c.fecha_pago)}</td><td>${esc(c.cliente)}</td><td>${reciboLink(c.empresa,c.nro_pago)}</td><td>${esc(c.documento)}</td><td>${fmt(c.importe)}</td>
+              ${multi?'<td colspan="3"></td><td class="small" style="text-align:right">↳</td>':`<td>${esc(c.empresa)}</td><td>${fmtFecha(c.fecha_pago)}</td><td>${esc(c.cliente)}</td><td>${reciboLink(c.empresa,c.nro_pago)}</td>`}<td>${esc(c.documento)}</td><td>${impCelda}</td>
               <td><select id="ctipo-${key}" style="width:auto" onchange="onCambioTipoComision('${key}')">${opcionesTipo(c.original)}</select></td>
               <td id="ccalc-${key}" class="small">${calcTextoComision(c.original,c.importe,c.pct)}</td>
             </tr>`;
+            }).join('');
           }).join('')}</tbody></table></div>
           <div style="text-align:right;display:flex;gap:8px;justify-content:flex-end">
             <button onclick="closeModal()">Cerrar</button>
@@ -1094,10 +1110,34 @@ async function verComisionVendedor(grupoId){
           </div>
         </div>
       </div>`;
+    gruposRec.forEach(gr=>{if(gr.items.length>1)refrescarCabeceraRecibo(gr.i);});
   }catch(e){alert('Error: '+e.message);}
 }
 let COMISION_GRUPO=null;
+let COMISION_GRUPOS_REC=[];
 const filaTocada=c=>c.current!==c.original||c.aprobC!==c.aprobO;
+// Casilla de la cabecera de un recibo con varios conceptos: refleja (y comanda) a sus filas aprobables.
+function refrescarCabeceraRecibo(i){
+  const cb=document.getElementById('cheadchk-'+i);
+  const gr=COMISION_GRUPOS_REC[i];
+  if(!cb||!gr)return;
+  const ap=gr.items.map(it=>COMISION_CTX[it.key]).filter(c=>c.origin==='detalle'&&c.current);
+  const n=ap.filter(c=>c.aprobC).length;
+  cb.disabled=ap.length===0;
+  cb.checked=ap.length>0&&n===ap.length;
+  cb.indeterminate=n>0&&n<ap.length;
+}
+function onCambioAprobacionRecibo(i,valor){
+  const gr=COMISION_GRUPOS_REC[i];
+  if(!gr)return;
+  gr.items.forEach(it=>{
+    const ctx=COMISION_CTX[it.key];
+    if(ctx.origin!=='detalle'||!ctx.current)return;
+    ctx.aprobC=valor;
+    const cb=document.getElementById('caprob-'+it.key);if(cb)cb.checked=valor;
+    refrescarFilaComision(it.key);
+  });
+}
 // verde claro = recibo aprobado; rojo claro = sin comisión definida; ámbar = cambio sin guardar
 function colorFilaComision(c){
   if(filaTocada(c))return '#fff8e1';
@@ -1108,6 +1148,7 @@ function refrescarFilaComision(key){
   const c=COMISION_CTX[key];
   const row=document.getElementById('crow-'+key);
   if(row)row.style.background=colorFilaComision(c);
+  if(c.grp!=null)refrescarCabeceraRecibo(c.grp);
   const n=Object.values(COMISION_CTX).filter(filaTocada).length;
   const btn=document.getElementById('cguardar-btn');
   if(btn){btn.disabled=n===0;btn.textContent=n>0?'Guardar cambios ('+n+')':'Guardar cambios';}
@@ -1621,6 +1662,27 @@ async function cargarRecibosPago(){
   rows.forEach(r=>{RECIBOS_CACHE[claveRecibo(r.empresa,r.nro_pago)]=r;});
   return RECIBOS_CACHE;
 }
+// Agrupa las filas de un mismo recibo para mostrarlo UNA vez por el importe que pagó el cliente
+// (recibos_pago.importe, salido de Odoo), con el desglose por documento debajo. Es solo presentación:
+// la base y la comisión de cada fila siguen calculándose sobre lo aplicado a su documento.
+// items: [{empresa,nro_pago,aplicado}], devuelve [{items,total,sumaAplicada}] respetando el orden de entrada.
+function agruparRecibos(items,recibos){
+  const grupos=[],porClave={};
+  items.forEach(it=>{
+    const k=claveRecibo(it.empresa,it.nro_pago);
+    // solo se agrupan recibos reales de Odoo; los cargados a mano comparten un N° de relleno (RE-X 0001-0000000) y no son un mismo pago
+    if(!it.nro_pago||/0{7}$/.test(it.nro_pago)||!(recibos&&recibos[k])){grupos.push({items:[it]});return;}
+    if(!porClave[k]){porClave[k]={clave:k,items:[]};grupos.push(porClave[k]);}
+    porClave[k].items.push(it);
+  });
+  grupos.forEach(g=>{
+    g.sumaAplicada=g.items.reduce((a,it)=>a+(Number(it.aplicado)||0),0);
+    const r=g.clave&&recibos?recibos[g.clave]:null;
+    // el total de Odoo solo vale si cubre lo aplicado (si fuera menor, el recibo se repartió entre vendedores/filas ajenas)
+    g.total=(r&&r.importe!=null&&Number(r.importe)>=g.sumaAplicada-0.5)?Number(r.importe):g.sumaAplicada;
+  });
+  return grupos;
+}
 // Número de recibo clickeable (se resuelve con un listener delegado, ver más abajo).
 function reciboLink(empresa,nro){
   if(!nro)return '';
@@ -1676,6 +1738,10 @@ async function verRecibosPeriodo(liquidacionId,vendedorId){
       sbFetch('liquidacion_detalle?liquidacion_id=eq.'+liquidacionId+'&aprobado=eq.true&vendedor_nombre=eq.'+encodeURIComponent(v.nombre_mostrar)+'&select=*&order=fecha_pago.asc,cliente.asc'),
     ]);
     const l=liqs[0];
+    let recibos={};
+    try{recibos=await cargarRecibosPago();}catch(e){/* sin datos de Odoo: se muestra la suma de lo aplicado */}
+    const gruposRec=agruparRecibos(rows.map(r=>({r,empresa:r.empresa,nro_pago:r.nro_pago,aplicado:r.importe_pago})),recibos);
+    const filaRec=(r,fecha,imp,hijo)=>'<tr><td>'+(hijo?'':fmtFecha(r.fecha_pago))+'</td><td>'+(hijo?'':esc(r.empresa))+'</td><td>'+(hijo?'':esc(r.cliente))+'</td><td>'+(hijo?'<span class="small">↳</span>':reciboLink(r.empresa,r.nro_pago))+'</td><td>'+esc(r.tipo_doc)+'</td><td>'+imp+'</td><td>'+fmt(r.base_comisionable)+'</td><td>'+r.pct_comision+'%</td><td>'+fmt(r.comision_a_pagar)+'</td></tr>';
     const total=rows.reduce((a,r)=>a+(r.comision_a_pagar||0),0);
     const base=rows.reduce((a,r)=>a+(r.base_comisionable||0),0);
     document.getElementById('modal').innerHTML=`
@@ -1684,8 +1750,14 @@ async function verRecibosPeriodo(liquidacionId,vendedorId){
           <div class="modal-title">${esc(v.nombre_mostrar)} — ${MESES[l.mes-1]} ${l.anio}</div>
           <p class="small" style="margin-bottom:12px">Recibos cobrados y aprobados que componen esta comisión de <b>${fmt(total)}</b>. Tocá un recibo para ver cómo pagó el cliente.</p>
           <div class="table-wrap" style="margin-bottom:16px;max-height:440px;overflow-y:auto"><table><thead><tr><th>Fecha</th><th>Empresa</th><th>Cliente</th><th>Recibo</th><th>Tipo</th><th>Importe del recibo</th><th>Base comisionable</th><th>%</th><th>Comisión</th></tr></thead>
-          <tbody>${rows.length===0?'<tr><td colspan="9" class="small" style="white-space:normal">Sin recibos.</td></tr>':rows.map(r=>'<tr><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.empresa)+'</td><td>'+esc(r.cliente)+'</td><td>'+reciboLink(r.empresa,r.nro_pago)+'</td><td>'+esc(r.tipo_doc)+'</td><td>'+fmt(r.importe_pago)+'</td><td>'+fmt(r.base_comisionable)+'</td><td>'+r.pct_comision+'%</td><td>'+fmt(r.comision_a_pagar)+'</td></tr>').join('')}
-          <tr class="total-row"><td colspan="6">TOTAL (${rows.length} recibos)</td><td>${fmt(base)}</td><td></td><td>${fmt(total)}</td></tr>
+          <tbody>${rows.length===0?'<tr><td colspan="9" class="small" style="white-space:normal">Sin recibos.</td></tr>':gruposRec.map(gr=>{
+            const r0=gr.items[0].r;
+            if(gr.items.length===1)return filaRec(r0,null,fmt(gr.total)+(Math.abs(gr.total-(Number(r0.importe_pago)||0))>0.5?'<div class="small">aplicado '+fmt(r0.importe_pago)+'</div>':''),false);
+            const sub=gr.items.reduce((a,it)=>a+(it.r.comision_a_pagar||0),0);
+            return '<tr style="background:#f4f6fa;font-weight:600"><td>'+fmtFecha(r0.fecha_pago)+'</td><td>'+esc(r0.empresa)+'</td><td>'+esc(r0.cliente)+'</td><td>'+reciboLink(r0.empresa,r0.nro_pago)+'</td><td class="small" style="font-weight:400;white-space:normal">Pago del cliente, aplicado a '+gr.items.length+' conceptos</td><td>'+fmt(gr.total)+'</td><td></td><td></td><td>'+fmt(sub)+'</td></tr>'
+              +gr.items.map(it=>filaRec(it.r,null,'<span class="small">aplicado </span>'+fmt(it.r.importe_pago),true)).join('');
+          }).join('')}
+          <tr class="total-row"><td colspan="6">TOTAL (${gruposRec.length} recibos)</td><td>${fmt(base)}</td><td></td><td>${fmt(total)}</td></tr>
           </tbody></table></div>
           <div style="text-align:right"><button onclick="closeModal()">Cerrar</button></div>
         </div>
