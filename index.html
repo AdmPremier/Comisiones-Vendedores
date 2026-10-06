@@ -271,6 +271,40 @@ function mapRows(rawRows,cols,headerKeyword){
   }
   return out;
 }
+// Alias (ya normalizados con normKey) de los encabezados de la hoja "Sin Comisión - Revisar".
+// Esta hoja cambió de diseño entre la salida cruda de la tarea (7-8 columnas) y la versión pulida
+// a mano (13 columnas, con Tipo Doc./N° Documento/% Comisión/A-B/Base/Comisión), así que se lee
+// por nombre de columna en vez de por posición.
+const ALIAS_SIN_COMISION={
+  vendedor:['vendedor'],empresa:['empresa'],fecha:['fecha'],cliente:['cliente'],
+  nro_pago:['n de pago'],categoria:['tipo doc'],nro_documento:['n documento'],
+  importe:['importe'],pct:['comision'],motivo:['motivo'],tipo_ab:['a b','aplica'],
+  base:['base comisionable'],comision:['comision a pagar']
+};
+function mapRowsByHeader(rawRows,headerKeyword,aliases,fallbackCols){
+  const headerIdx=findHeaderRowIdx(rawRows,headerKeyword);
+  if(headerIdx<0)return mapRows(rawRows,fallbackCols,headerKeyword);
+  const headers=(rawRows[headerIdx]||[]).map(h=>normKey(h));
+  const colIdx={};
+  for(const [campo,nombres] of Object.entries(aliases)){
+    const i=headers.findIndex(h=>nombres.includes(h));
+    if(i>=0)colIdx[campo]=i;
+  }
+  // sin vendedor/importe no reconocemos el encabezado: se cae al mapeo posicional de siempre
+  if(colIdx.vendedor===undefined||colIdx.importe===undefined)return mapRows(rawRows,fallbackCols,headerKeyword);
+  const out=[];
+  for(let i=headerIdx+1;i<rawRows.length;i++){
+    const row=rawRows[i];
+    if(!row||row.every(c=>c===''||c==null))continue;
+    const obj={};
+    for(const campo of Object.keys(aliases)){
+      const v=colIdx[campo]!==undefined?row[colIdx[campo]]:undefined;
+      obj[campo]=v!==undefined?v:'';
+    }
+    out.push(obj);
+  }
+  return out;
+}
 function normalizePct(v){
   // El Excel real guarda "% Comisión" como fracción (0.05 = 5%), no como "5". Cualquier
   // valor <=1 se interpreta como fracción y se pasa a porcentaje entero (para que coincida
@@ -306,7 +340,7 @@ function parseWorkbook(wb){
 
 function parseWorkbookV1(wb,detSheet,scSheet,excSheet){
   const detalleRaw=mapRows(sheetRows(wb.Sheets[detSheet]),COLS_DETALLE_V1,'Vendedor');
-  const sinComisionRaw=scSheet?mapRows(sheetRows(wb.Sheets[scSheet]),COLS_SIN_COMISION,'Vendedor'):[];
+  const sinComisionRaw=scSheet?mapRowsByHeader(sheetRows(wb.Sheets[scSheet]),'Vendedor',ALIAS_SIN_COMISION,COLS_SIN_COMISION):[];
   const excluidosRaw=excSheet?mapRows(sheetRows(wb.Sheets[excSheet]),COLS_EXCLUIDOS,'Cliente'):[];
 
   const detalle=detalleRaw.map(r=>({
@@ -323,18 +357,41 @@ function parseWorkbookV1(wb,detSheet,scSheet,excSheet){
     base_comisionable:parseNum(r.base_comisionable),
     pct_comision:normalizePct(r.pct_comision),
     comision_a_pagar:parseNum(r.comision_a_pagar)
-  })).filter(r=>r.vendedor_nombre||r.cliente);
+  })).filter(r=>(r.vendedor_nombre||r.cliente)&&normKey(r.vendedor_nombre)!=='total');
 
-  const sinComision=sinComisionRaw.map(r=>({
-    vendedor_nombre:String(r.vendedor||'').trim(),
-    empresa:String(r.empresa||'').trim(),
-    fecha_pago:parseFechaCell(r.fecha),
-    cliente:String(r.cliente||'').trim(),
-    nro_pago:String(r.nro_pago||'').trim(),
-    motivo:String(r.motivo||'').trim(),
-    importe:parseNum(r.importe),
-    aplica:String(r.aplica||'').trim()
-  })).filter(r=>r.cliente||r.motivo);
+  // "Sin Comisión - Revisar": en la versión pulida a mano, las filas que ya traen A/B + Comisión
+  // a Pagar son comisiones resueltas (pasan a Detalle, igual que en el formato nuevo); las que
+  // quedan en blanco siguen "a revisar". En la salida cruda vieja (sin esas columnas) todas
+  // quedan "a revisar", como siempre.
+  const sinComision=[];
+  sinComisionRaw.forEach(r=>{
+    const vendedor_nombre=resolveVendorName(r.vendedor,r.pct);
+    if(!vendedor_nombre&&!String(r.cliente||'').trim())return;
+    if(normKey(vendedor_nombre)==='total')return;
+    const empresa=String(r.empresa||'').trim();
+    const fecha_pago=parseFechaCell(r.fecha);
+    const cliente=String(r.cliente||'').trim();
+    const nro_pago=String(r.nro_pago||'').trim();
+    const categoria=String(r.categoria||'').trim();
+    let doc=String(r.nro_documento||'').trim();
+    if(doc==='-')doc='';
+    const documento=[categoria,doc].filter(Boolean).join(' — ');
+    const tipoAB=String(r.tipo_ab||'').trim();
+    const pct=normalizePct(r.pct);
+    const importe=parseNum(r.importe);
+    const resuelta=r.comision!==''&&r.comision!=null&&tipoAB!=='';
+    if(resuelta){
+      const comision=parseNum(r.comision);
+      const base=(r.base!==''&&r.base!=null)?parseNum(r.base):(pct>0?comision/(pct/100):0);
+      detalle.push({vendedor_nombre,empresa,fecha_pago,cliente,nro_pago,tipo_doc:tipoAB,nro_documento:documento,
+        importe_pago:importe,neto_documento:null,total_documento:null,base_comisionable:base,pct_comision:pct,comision_a_pagar:comision});
+    }else{
+      const motivoOrig=String(r.motivo||'').trim();
+      sinComision.push({vendedor_nombre,empresa,fecha_pago,cliente,nro_pago,
+        motivo:documento?'Comisión sin definir todavía — '+documento:(motivoOrig||'Comisión sin definir todavía'),
+        importe,aplica:tipoAB});
+    }
+  });
 
   const excluidos=excluidosRaw.map(r=>({
     cliente:String(r.cliente||'').trim(),
@@ -462,6 +519,8 @@ function renderCargaPreview(){
     if(!sheetsFound.scSheet)warns+='<div class="alert alert-amber">No encontré la hoja "Sin Comisión - Revisar" — se guardará vacía.</div>';
     if(!sheetsFound.excSheet)warns+='<div class="alert alert-amber">No encontré la hoja "Excluidos" — se guardará vacía.</div>';
   }
+  const conImporteCero=detalle.filter(r=>r.importe_pago===0).length+sinComision.filter(r=>r.importe===0).length;
+  if(conImporteCero)warns+='<div class="alert alert-amber">Hay <b>'+conImporteCero+'</b> pago(s) con importe $0 — puede que las columnas del Excel no coincidan con lo esperado. Revisá el preview antes de confirmar.</div>';
   if(desconocidos.length)warns+='<div class="alert alert-red">Vendedor(es) en el Excel que no están en la tabla de vendedores: <b>'+desconocidos.map(esc).join(', ')+'</b>. Revisá el nombre exacto o agregalo en la tabla <code>vendedores</code> antes de confirmar (si confirmás igual, sus comisiones se guardan pero no van a sumar en la cuenta corriente hasta que coincida el nombre).</div>';
 
   prevEl.innerHTML=`
