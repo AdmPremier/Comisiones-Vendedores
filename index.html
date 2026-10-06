@@ -73,6 +73,11 @@ tr.total-row td{font-weight:700;border-top:2px solid #ddd;background:#fafafa}
 .saldo-zero{color:#888;font-weight:700}
 .small{font-size:12px;color:#888}
 .link{color:#1565c0;cursor:pointer;text-decoration:underline}
+#aviso-version{position:fixed;top:0;left:0;right:0;z-index:500;height:44px;display:flex;align-items:center;justify-content:center;gap:12px;background:#1565c0;color:#fff;font-size:14px;font-weight:500;box-shadow:0 2px 6px rgba(0,0,0,0.2)}
+#aviso-version button{background:#fff;color:#1565c0;border:none;padding:5px 14px;font-weight:600}
+#aviso-version button:hover{background:#e3f2fd}
+body.con-aviso{padding-top:44px}
+body.con-aviso nav{top:44px}
 .kpi-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px}
 .hist-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:20px}
 .chart-box{position:relative;height:300px}
@@ -1273,9 +1278,10 @@ async function verVendedor(vendedorId){
       </div>
       <div style="text-align:right;margin-bottom:16px"><button class="primary" onclick="registrarPago(${v.id})">Registrar pago</button></div>
 
-      <h3 style="font-size:15px;font-weight:600;margin-bottom:10px">Liquidaciones aprobadas</h3>
-      <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Período</th><th>Base Comisionable</th><th>Comisión</th></tr></thead>
-      <tbody>${liqsConDatos.length===0?'<tr><td colspan="3" class="small" style="white-space:normal">Sin liquidaciones aprobadas todavía.</td></tr>':liqsConDatos.map(l=>'<tr><td>'+MESES[l.mes-1]+' '+l.anio+'</td><td>'+fmt(porLiq[l.id].base)+'</td><td>'+fmt(porLiq[l.id].comision)+'</td></tr>').join('')}</tbody></table></div>
+      <h3 style="font-size:15px;font-weight:600;margin-bottom:4px">Liquidaciones aprobadas</h3>
+      <p class="small" style="margin-bottom:10px">Tocá un período para ver los recibos que componen esa comisión.</p>
+      <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Período</th><th>Base Comisionable</th><th>Comisión</th><th></th></tr></thead>
+      <tbody>${liqsConDatos.length===0?'<tr><td colspan="4" class="small" style="white-space:normal">Sin liquidaciones aprobadas todavía.</td></tr>':liqsConDatos.map(l=>'<tr style="cursor:pointer" onclick="verRecibosPeriodo('+l.id+','+v.id+')"><td><span class="link">'+MESES[l.mes-1]+' '+l.anio+'</span></td><td>'+fmt(porLiq[l.id].base)+'</td><td>'+fmt(porLiq[l.id].comision)+'</td><td><button style="font-size:12px;padding:4px 10px" onclick="event.stopPropagation();verRecibosPeriodo('+l.id+','+v.id+')">Ver recibos →</button></td></tr>').join('')}</tbody></table></div>
 
       <h3 style="font-size:15px;font-weight:600;margin-bottom:10px">Pagos registrados</h3>
       <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Importe</th><th>Nota</th><th>Registrado por</th><th></th></tr></thead>
@@ -1440,6 +1446,64 @@ function rImplBadge(){
     btn.innerHTML='Implementaciones'+(n>0?' <span style="background:#c62828;color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;margin-left:4px">'+n+'</span>':'');
   }).catch(()=>{});
 }
+
+// ============================================================
+// ESTADO DE CUENTA: RECIBOS QUE COMPONEN LA COMISIÓN DE UN PERÍODO
+// ============================================================
+async function verRecibosPeriodo(liquidacionId,vendedorId){
+  const v=DB.vendedores.find(x=>x.id===vendedorId);
+  if(!v)return;
+  try{
+    const [liqs,rows]=await Promise.all([
+      sbFetch('liquidaciones?id=eq.'+liquidacionId+'&select=mes,anio'),
+      sbFetch('liquidacion_detalle?liquidacion_id=eq.'+liquidacionId+'&vendedor_nombre=eq.'+encodeURIComponent(v.nombre_mostrar)+'&select=*&order=fecha_pago.asc,cliente.asc'),
+    ]);
+    const l=liqs[0];
+    const total=rows.reduce((a,r)=>a+(r.comision_a_pagar||0),0);
+    const base=rows.reduce((a,r)=>a+(r.base_comisionable||0),0);
+    document.getElementById('modal').innerHTML=`
+      <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+        <div class="modal" style="max-width:1000px">
+          <div class="modal-title">${esc(v.nombre_mostrar)} — ${MESES[l.mes-1]} ${l.anio}</div>
+          <p class="small" style="margin-bottom:12px">Recibos cobrados que componen esta comisión de <b>${fmt(total)}</b>.</p>
+          <div class="table-wrap" style="margin-bottom:16px;max-height:440px;overflow-y:auto"><table><thead><tr><th>Fecha</th><th>Empresa</th><th>Cliente</th><th>Recibo</th><th>Tipo</th><th>Importe del recibo</th><th>Base comisionable</th><th>%</th><th>Comisión</th></tr></thead>
+          <tbody>${rows.length===0?'<tr><td colspan="9" class="small" style="white-space:normal">Sin recibos.</td></tr>':rows.map(r=>'<tr><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.empresa)+'</td><td>'+esc(r.cliente)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+esc(r.tipo_doc)+'</td><td>'+fmt(r.importe_pago)+'</td><td>'+fmt(r.base_comisionable)+'</td><td>'+r.pct_comision+'%</td><td>'+fmt(r.comision_a_pagar)+'</td></tr>').join('')}
+          <tr class="total-row"><td colspan="6">TOTAL (${rows.length} recibos)</td><td>${fmt(base)}</td><td></td><td>${fmt(total)}</td></tr>
+          </tbody></table></div>
+          <div style="text-align:right"><button onclick="closeModal()">Cerrar</button></div>
+        </div>
+      </div>`;
+  }catch(e){alert('Error: '+e.message);}
+}
+
+// ============================================================
+// AVISO DE VERSIÓN NUEVA
+// ============================================================
+// Cada tanto (y al volver a la pestaña) se vuelve a pedir el index.html sin caché y se compara con
+// el que se cargó al abrir; si cambió, aparece una barra arriba para refrescar. No hace falta
+// tocar ningún número de versión: cualquier cambio publicado dispara el aviso.
+let APP_HASH=null;
+function hashTexto(s){let h=5381;for(let i=0;i<s.length;i++)h=((h<<5)+h+s.charCodeAt(i))|0;return h;}
+async function chequearVersionNueva(){
+  try{
+    const r=await fetch(location.pathname+'?_v='+Date.now(),{cache:'no-store'});
+    if(!r.ok)return;
+    const h=hashTexto(await r.text());
+    if(APP_HASH===null){APP_HASH=h;return;}
+    if(h!==APP_HASH)mostrarAvisoVersionNueva();
+  }catch(e){/* sin red: se reintenta en el próximo ciclo */}
+}
+function mostrarAvisoVersionNueva(){
+  if(document.getElementById('aviso-version'))return;
+  const d=document.createElement('div');
+  d.id='aviso-version';
+  d.innerHTML='<span>🔔 Hay una nueva versión del aplicativo.</span> <button onclick="location.reload()">Actualizar ahora</button>';
+  document.body.prepend(d);
+  document.body.classList.add('con-aviso');
+}
+chequearVersionNueva();
+setInterval(chequearVersionNueva,60000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)chequearVersionNueva();});
 </script>
 </body>
 </html>
