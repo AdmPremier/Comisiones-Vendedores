@@ -375,7 +375,11 @@ function parseWorkbookV1(wb,detSheet,scSheet,excSheet){
     const categoria=String(r.categoria||'').trim();
     let doc=String(r.nro_documento||'').trim();
     if(doc==='-')doc='';
-    const documento=[categoria,doc].filter(Boolean).join(' — ');
+    // La salida cruda no trae N° Documento: se usa la primera parte del motivo (ej. "Saldo
+    // migración", "Anticipo sin aplicar") en vez del texto explicativo completo.
+    const motivoOrig=String(r.motivo||'').trim();
+    const motivoCorto=motivoOrig.split(/\s+-\s+|:\s/)[0].trim();
+    const documento=[categoria,doc].filter(Boolean).join(' — ')||motivoCorto;
     const tipoAB=String(r.tipo_ab||'').trim();
     const pct=normalizePct(r.pct);
     const importe=parseNum(r.importe);
@@ -386,9 +390,8 @@ function parseWorkbookV1(wb,detSheet,scSheet,excSheet){
       detalle.push({vendedor_nombre,empresa,fecha_pago,cliente,nro_pago,tipo_doc:tipoAB,nro_documento:documento,
         importe_pago:importe,neto_documento:null,total_documento:null,base_comisionable:base,pct_comision:pct,comision_a_pagar:comision});
     }else{
-      const motivoOrig=String(r.motivo||'').trim();
       sinComision.push({vendedor_nombre,empresa,fecha_pago,cliente,nro_pago,
-        motivo:documento?'Comisión sin definir todavía — '+documento:(motivoOrig||'Comisión sin definir todavía'),
+        motivo:'Comisión sin definir todavía'+(documento?' — '+documento:''),
         importe,aplica:tipoAB});
     }
   });
@@ -400,7 +403,7 @@ function parseWorkbookV1(wb,detSheet,scSheet,excSheet){
     fecha_pago:parseFechaCell(r.fecha),
     nro_pago:String(r.nro_pago||'').trim(),
     importe:parseNum(r.importe)
-  })).filter(r=>r.cliente||r.motivo);
+  })).filter(r=>(r.cliente||r.motivo)&&normKey(r.cliente)!=='total');
 
   return {detalle,sinComision,excluidos,sheetsFound:{detSheet,scSheet,excSheet,formatVersion:'v1'}};
 }
