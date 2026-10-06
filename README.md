@@ -101,6 +101,11 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
   "Sin Comisión", y la versión pulida a mano llegaba a 13). Si el encabezado no se reconoce, cae al
   mapeo posicional. Las filas TOTAL se ignoran en las tres hojas, y el preview avisa si hay pagos
   con importe $0 (señal de columnas corridas).
+- **Pagos a vendedores editables** (7-oct-2026): en la pestaña Vendedores → detalle de un vendedor,
+  cada pago registrado tiene **Editar** (fecha, importe, nota) y **Eliminar** (con confirmación); el
+  saldo se recalcula solo. El importe del formulario acepta el formato argentino (`27.812` = 27812,
+  `27.812,50`, `27,5`) vía `parseImporteAR()` y muestra "Se va a guardar: $ …" mientras se escribe,
+  para detectar a tiempo un importe mal pegado.
 - **Vendedores inactivos no se importan** (6-oct-2026): Laura Aguado se liquida aparte (35% sobre
   neto, fuera de esta app), así que está con `activo=false` en la tabla `vendedores`
   (ver `sql/006_laura_aguado_inactiva.sql`). `descartarVendedoresInactivos()` descarta al importar

@@ -1121,39 +1121,94 @@ async function verVendedor(vendedorId){
       <tbody>${liqsConDatos.length===0?'<tr><td colspan="3" class="small" style="white-space:normal">Sin liquidaciones aprobadas todavía.</td></tr>':liqsConDatos.map(l=>'<tr><td>'+MESES[l.mes-1]+' '+l.anio+'</td><td>'+fmt(porLiq[l.id].base)+'</td><td>'+fmt(porLiq[l.id].comision)+'</td></tr>').join('')}</tbody></table></div>
 
       <h3 style="font-size:15px;font-weight:600;margin-bottom:10px">Pagos registrados</h3>
-      <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Importe</th><th>Nota</th><th>Registrado por</th></tr></thead>
-      <tbody>${pagos.length===0?'<tr><td colspan="4" class="small" style="white-space:normal">Sin pagos registrados todavía.</td></tr>':pagos.map(p=>'<tr><td>'+fmtFecha(p.fecha)+'</td><td>'+fmt(p.importe)+'</td><td>'+esc(p.nota||'—')+'</td><td>'+esc(p.registrado_por||'—')+'</td></tr>').join('')}</tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Importe</th><th>Nota</th><th>Registrado por</th><th></th></tr></thead>
+      <tbody>${pagos.length===0?'<tr><td colspan="5" class="small" style="white-space:normal">Sin pagos registrados todavía.</td></tr>':pagos.map(p=>'<tr><td>'+fmtFecha(p.fecha)+'</td><td>'+fmt(p.importe)+'</td><td>'+esc(p.nota||'—')+'</td><td>'+esc(p.registrado_por||'—')+'</td><td><button style="font-size:12px;padding:4px 10px" onclick="editarPago('+p.id+','+v.id+')">Editar</button> <button class="danger" style="font-size:12px;padding:4px 10px" onclick="eliminarPago('+p.id+','+v.id+')">Eliminar</button></td></tr>').join('')}</tbody></table></div>
     `;
   }catch(e){document.getElementById('mc').innerHTML='<div class="loading" style="color:#c00">Error: '+esc(e.message)+'</div>';}
 }
 
-function registrarPago(vendedorId){
-  const v=DB.vendedores.find(x=>x.id===vendedorId);
-  const hoy=new Date().toISOString().slice(0,10);
-  document.getElementById('modal').innerHTML=`
+// Importe tal como se escribe en Argentina: "27.812" = 27812 (el punto es de miles), "27.812,50" =
+// 27812,5, "27,5" = 27,5. Con puntos solamente y todos los grupos de 3 dígitos se toma como miles;
+// con 1-2 decimales ("27.5", "27.81") se respeta como decimal.
+function parseImporteAR(v){
+  let s=String(v==null?'':v).trim().replace(/\$/g,'').replace(/\s/g,'');
+  if(!s)return NaN;
+  const lc=s.lastIndexOf(','),ld=s.lastIndexOf('.');
+  if(lc>-1&&ld>-1)s=lc>ld?s.replace(/\./g,'').replace(',','.'):s.replace(/,/g,'');
+  else if(lc>-1)s=s.replace(/\./g,'').replace(',','.');
+  else if(ld>-1){const p=s.split('.');if(p[0]!=='0'&&p.slice(1).every(x=>/^\d{3}$/.test(x)))s=p.join('');}
+  const n=Number(s);
+  return isNaN(n)?NaN:n;
+}
+function formPagoHtml(titulo,p,onSave){
+  return `
     <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
       <div class="modal">
-        <div class="modal-title">Registrar pago — ${esc(v.nombre_mostrar)}</div>
-        <div class="form-group"><label>Fecha</label><input id="pago-fecha" type="date" value="${hoy}"></div>
-        <div class="form-group"><label>Importe</label><input id="pago-importe" type="number" step="0.01" min="0"></div>
-        <div class="form-group"><label>Nota (opcional)</label><input id="pago-nota" type="text"></div>
+        <div class="modal-title">${titulo}</div>
+        <div class="form-group"><label>Fecha</label><input id="pago-fecha" type="date" value="${esc(p.fecha)}"></div>
+        <div class="form-group"><label>Importe</label><input id="pago-importe" type="text" inputmode="decimal" placeholder="Ej: 27.812 o 27812,50" value="${esc(p.importe)}" oninput="previewImportePago()"><div id="pago-preview" class="small" style="margin-top:4px"></div></div>
+        <div class="form-group"><label>Nota (opcional)</label><input id="pago-nota" type="text" value="${esc(p.nota)}"></div>
         <div id="pago-err" class="alert alert-red hidden"></div>
-        <div style="display:flex;gap:8px;justify-content:flex-end"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="confirmarPago(${vendedorId})">Guardar</button></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end"><button onclick="closeModal()">Cancelar</button><button class="primary" onclick="${onSave}">Guardar</button></div>
       </div>
     </div>`;
 }
+function previewImportePago(){
+  const n=parseImporteAR(document.getElementById('pago-importe').value);
+  document.getElementById('pago-preview').textContent=isNaN(n)?'':'Se va a guardar: '+fmt(n);
+}
+function leerFormPago(){
+  const fecha=document.getElementById('pago-fecha').value;
+  const importe=parseImporteAR(document.getElementById('pago-importe').value);
+  const nota=document.getElementById('pago-nota').value.trim();
+  if(!fecha||isNaN(importe)||importe<=0){
+    const err=document.getElementById('pago-err');err.classList.remove('hidden');err.textContent='Completá fecha e importe (mayor a 0)';
+    return null;
+  }
+  return {fecha,importe,nota:nota||null};
+}
+function registrarPago(vendedorId){
+  const v=DB.vendedores.find(x=>x.id===vendedorId);
+  const hoy=new Date().toISOString().slice(0,10);
+  document.getElementById('modal').innerHTML=formPagoHtml('Registrar pago — '+esc(v.nombre_mostrar),{fecha:hoy,importe:'',nota:''},'confirmarPago('+vendedorId+')');
+}
 async function confirmarPago(vendedorId){
   const v=DB.vendedores.find(x=>x.id===vendedorId);
-  const fecha=document.getElementById('pago-fecha').value;
-  const importe=parseFloat(document.getElementById('pago-importe').value);
-  const nota=document.getElementById('pago-nota').value.trim();
-  const err=document.getElementById('pago-err');
-  if(!fecha||!importe||importe<=0){err.classList.remove('hidden');err.textContent='Completá fecha e importe (mayor a 0)';return;}
+  const d=leerFormPago();
+  if(!d)return;
   try{
-    await sbFetch('pagos_vendedor',{method:'POST',body:JSON.stringify({vendedor_nombre:v.nombre_mostrar,fecha,importe,nota:nota||null,registrado_por:CU.label})});
+    await sbFetch('pagos_vendedor',{method:'POST',body:JSON.stringify({vendedor_nombre:v.nombre_mostrar,...d,registrado_por:CU.label})});
     closeModal();
     verVendedor(vendedorId);
-  }catch(e){err.classList.remove('hidden');err.textContent='Error: '+e.message;}
+  }catch(e){const err=document.getElementById('pago-err');err.classList.remove('hidden');err.textContent='Error: '+e.message;}
+}
+async function editarPago(pagoId,vendedorId){
+  try{
+    const rows=await sbFetch('pagos_vendedor?id=eq.'+pagoId+'&select=*');
+    const p=rows[0];
+    if(!p)return;
+    document.getElementById('modal').innerHTML=formPagoHtml('Editar pago — '+esc(p.vendedor_nombre),{fecha:p.fecha,importe:String(p.importe).replace('.',','),nota:p.nota||''},'confirmarEdicionPago('+pagoId+','+vendedorId+')');
+    previewImportePago();
+  }catch(e){alert('Error: '+e.message);}
+}
+async function confirmarEdicionPago(pagoId,vendedorId){
+  const d=leerFormPago();
+  if(!d)return;
+  try{
+    await sbFetch('pagos_vendedor?id=eq.'+pagoId,{method:'PATCH',body:JSON.stringify(d)});
+    closeModal();
+    verVendedor(vendedorId);
+  }catch(e){const err=document.getElementById('pago-err');err.classList.remove('hidden');err.textContent='Error: '+e.message;}
+}
+async function eliminarPago(pagoId,vendedorId){
+  try{
+    const rows=await sbFetch('pagos_vendedor?id=eq.'+pagoId+'&select=*');
+    const p=rows[0];
+    if(!p)return;
+    if(!confirm('¿Eliminar el pago del '+fmtFecha(p.fecha)+' por '+fmt(p.importe)+' a '+p.vendedor_nombre+'? El saldo del vendedor se recalcula.'))return;
+    await sbFetch('pagos_vendedor?id=eq.'+pagoId,{method:'DELETE'});
+    verVendedor(vendedorId);
+  }catch(e){alert('Error: '+e.message);}
 }
 
 // ============================================================
