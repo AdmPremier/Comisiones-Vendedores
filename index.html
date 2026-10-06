@@ -281,7 +281,14 @@ const ALIAS_SIN_COMISION={
   importe:['importe'],pct:['comision'],motivo:['motivo'],tipo_ab:['a b','aplica'],
   base:['base comisionable'],comision:['comision a pagar']
 };
-function mapRowsByHeader(rawRows,headerKeyword,aliases,fallbackCols){
+// Alias de la hoja "Detalle - Comisión Calculada" (formato de 4 hojas).
+const ALIAS_DETALLE_V1={
+  vendedor:['vendedor'],empresa:['empresa'],fecha:['fecha'],cliente:['cliente'],nro_pago:['n de pago'],
+  tipo_doc:['tipo doc'],nro_documento:['n documento'],importe_pago:['importe del pago','importe'],
+  neto_documento:['neto documento'],total_documento:['total documento'],
+  base_comisionable:['base comisionable'],pct_comision:['comision'],comision_a_pagar:['comision a pagar']
+};
+function mapRowsByHeader(rawRows,headerKeyword,aliases,fallbackCols,requeridos=['vendedor','importe']){
   const headerIdx=findHeaderRowIdx(rawRows,headerKeyword);
   if(headerIdx<0)return mapRows(rawRows,fallbackCols,headerKeyword);
   const headers=(rawRows[headerIdx]||[]).map(h=>normKey(h));
@@ -290,8 +297,8 @@ function mapRowsByHeader(rawRows,headerKeyword,aliases,fallbackCols){
     const i=headers.findIndex(h=>nombres.includes(h));
     if(i>=0)colIdx[campo]=i;
   }
-  // sin vendedor/importe no reconocemos el encabezado: se cae al mapeo posicional de siempre
-  if(colIdx.vendedor===undefined||colIdx.importe===undefined)return mapRows(rawRows,fallbackCols,headerKeyword);
+  // si falta algún campo clave no reconocemos el encabezado: se cae al mapeo posicional de siempre
+  if(requeridos.some(c=>colIdx[c]===undefined))return mapRows(rawRows,fallbackCols,headerKeyword);
   const out=[];
   for(let i=headerIdx+1;i<rawRows.length;i++){
     const row=rawRows[i];
@@ -339,7 +346,7 @@ function parseWorkbook(wb){
 }
 
 function parseWorkbookV1(wb,detSheet,scSheet,excSheet){
-  const detalleRaw=mapRows(sheetRows(wb.Sheets[detSheet]),COLS_DETALLE_V1,'Vendedor');
+  const detalleRaw=mapRowsByHeader(sheetRows(wb.Sheets[detSheet]),'Vendedor',ALIAS_DETALLE_V1,COLS_DETALLE_V1,['vendedor','importe_pago','comision_a_pagar']);
   const sinComisionRaw=scSheet?mapRowsByHeader(sheetRows(wb.Sheets[scSheet]),'Vendedor',ALIAS_SIN_COMISION,COLS_SIN_COMISION):[];
   const excluidosRaw=excSheet?mapRows(sheetRows(wb.Sheets[excSheet]),COLS_EXCLUIDOS,'Cliente'):[];
 

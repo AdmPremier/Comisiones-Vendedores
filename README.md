@@ -95,6 +95,12 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
   resuelta (vuelve a `liquidacion_sin_comision`, reconstruyendo el motivo) — todo por
   `guardarCambiosComision`, que solo escribe las filas realmente tocadas (compara `current` vs
   `original` en `COMISION_CTX`).
+- **Formato de 4 hojas leído por nombre de columna** (6-oct-2026): "Detalle - Comisión Calculada" y
+  "Sin Comisión - Revisar" se mapean por encabezado (`ALIAS_DETALLE_V1` / `ALIAS_SIN_COMISION`), no
+  por posición, porque la tarea programada fue cambiando el orden/cantidad de columnas (7 → 10 en
+  "Sin Comisión", y la versión pulida a mano llegaba a 13). Si el encabezado no se reconoce, cae al
+  mapeo posicional. Las filas TOTAL se ignoran en las tres hojas, y el preview avisa si hay pagos
+  con importe $0 (señal de columnas corridas).
 - **"Ruben" en el formato nuevo**: la planilla pulida ya no distingue "Ruben (7,5%)" de
   "Ruben (10%)" por nombre — solo dice "Ruben", y la tasa real va en la columna Tasa de cada fila.
   `resolveVendorName()` matchea automáticamente contra los dos vendedores existentes según esa tasa
