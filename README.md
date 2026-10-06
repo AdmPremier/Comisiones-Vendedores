@@ -117,8 +117,13 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
   cheques y echeqs (número, banco, fecha de cobro, importe). Los datos están en la tabla
   `recibos_pago` (`sql/007_recibos_pago.sql`), clave `(empresa, nro_pago)`, y salen de Odoo
   (`account.payment` + `l10n_latam.check`). Hoy están cargados Agosto y Septiembre 2026 (47
-  recibos); los recibos cargados a mano (RC, del otro sistema) dicen "sin datos". Para meses nuevos
-  hay que cargarlos: la idea es que la tarea programada agregue una hoja "Medios de pago" al Excel.
+  recibos); los recibos cargados a mano (RC, del otro sistema) dicen "sin datos". Para meses nuevos la tarea
+  programada agrega al Excel una hoja opcional **"Medios de Pago"** (una fila por cheque/echeq; una
+  sola fila si fue efectivo o transferencia; columnas Empresa, N° de Pago, Fecha, Cliente, Importe
+  del Pago, Medio de Pago, Diario, Referencia, N° Cheque, Banco, Fecha de Cobro, Importe Cheque).
+  La app la lee por nombre de columna (`parseMediosPago`), la muestra en el preview y la guarda en
+  `recibos_pago` al confirmar la carga (`sbUpsert`, por empresa + N° de pago). Si la hoja no está,
+  la carga funciona igual y el preview avisa que ese mes no va a mostrar cómo pagó el cliente.
 - **Aviso de versión nueva** (8-oct-2026): barra azul fija arriba cuando hay una versión publicada
   distinta de la cargada (`chequearVersionNueva`, compara el index.html cada 60 s y al volver a la
   pestaña).

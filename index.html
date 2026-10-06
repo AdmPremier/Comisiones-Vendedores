@@ -363,7 +363,44 @@ function parseWorkbook(wb){
   // Si aparece una hoja separada de Sin Comisión o Excluidos, es el formato viejo (4 hojas).
   // Si no, es el formato nuevo (una sola hoja "Detalle" ya pulida a mano).
   const res=(scSheet||excSheet)?parseWorkbookV1(wb,detSheet,scSheet,excSheet):parseWorkbookV2(wb,detSheet);
+  res.medios=parseMediosPago(wb);
   return descartarVendedoresInactivos(res);
+}
+
+// Hoja opcional "Medios de Pago": una fila por cheque/echeq (o una sola fila si el recibo se pagó en
+// efectivo / transferencia). Se agrupa por (empresa, N° de pago) y se guarda en recibos_pago.
+const ALIAS_MEDIOS={
+  empresa:['empresa'],nro_pago:['n de pago'],fecha:['fecha'],cliente:['cliente'],
+  importe:['importe del pago','importe'],medio:['medio de pago','medio'],diario:['diario'],
+  referencia:['referencia','memo'],cheque_nro:['n cheque','n de cheque','cheque'],banco:['banco'],
+  fecha_cobro:['fecha de cobro'],importe_cheque:['importe cheque','importe del cheque']
+};
+function parseMediosPago(wb){
+  const nombre=findSheetName(wb,['medios de pago','medios']);
+  if(!nombre)return [];
+  const raw=sheetRows(wb.Sheets[nombre]);
+  if(findHeaderRowIdx(raw,'Empresa')<0)return [];
+  const filas=mapRowsByHeader(raw,'Empresa',ALIAS_MEDIOS,[],['nro_pago','medio']);
+  const porRecibo={};
+  filas.forEach(r=>{
+    const nro=String(r.nro_pago||'').trim();
+    if(!nro||normKey(nro)==='total')return;
+    const empresa=String(r.empresa||'').trim();
+    const k=normKey(empresa)+'|'+nro;
+    const rec=porRecibo[k]||(porRecibo[k]={empresa,nro_pago:nro,fecha:parseFechaCell(r.fecha),cliente:String(r.cliente||'').trim()||null,
+      importe:parseNum(r.importe),medio:String(r.medio||'').trim(),diario:String(r.diario||'').trim()||null,
+      referencia:String(r.referencia||'').trim()||null,cheques:[],fuente:'excel'});
+    const numCh=String(r.cheque_nro||'').trim();
+    if(numCh)rec.cheques.push({numero:numCh,banco:String(r.banco||'').trim(),fecha_cobro:parseFechaCell(r.fecha_cobro),importe:parseNum(r.importe_cheque)});
+  });
+  return Object.values(porRecibo);
+}
+// PostgREST upsert (sbFetch no permite pasar headers propios sin perder la apikey).
+async function sbUpsert(path,rows){
+  const res=await fetch(SUPABASE_URL+'/rest/v1/'+path,{method:'POST',
+    headers:{'apikey':SUPABASE_KEY,'Authorization':'Bearer '+SUPABASE_KEY,'Content-Type':'application/json','Prefer':'resolution=merge-duplicates,return=minimal'},
+    body:JSON.stringify(rows)});
+  if(!res.ok)throw new Error(await res.text());
 }
 
 // Los vendedores marcados activo=false en la tabla `vendedores` (ej. Laura Aguado, que se liquida
@@ -574,6 +611,7 @@ function renderCargaPreview(){
 
   prevEl.innerHTML=`
     <p class="small">Formato detectado: ${sheetsFound.formatVersion==='v2'?'nuevo (una hoja "Detalle" pulida a mano)':'viejo (4 hojas)'}</p>
+    <p class="small" style="margin-top:4px">${(PARSED.medios||[]).length?'💳 Medios de pago: <b>'+PARSED.medios.length+' recibos</b> ('+PARSED.medios.reduce((a,m)=>a+m.cheques.length,0)+' cheques/echeqs) — se podrá ver cómo pagó el cliente al tocar cada recibo.':'Sin hoja "Medios de Pago": los recibos de este mes no van a mostrar cómo pagó el cliente.'}</p>
     ${warns}
     <div class="grid4" style="margin:16px 0">
       <div class="metric"><div class="metric-label">Pagos comisionados</div><div class="metric-value">${detalle.length}</div></div>
@@ -638,6 +676,10 @@ async function confirmarCarga(){
     const gruposVendedor=[...vendedoresDelMes].map(vendedor_nombre=>({liquidacion_id:liq.id,vendedor_nombre}));
     for(const part of chunk(gruposVendedor,500)){
       if(part.length)await sbFetch('liquidacion_vendedores',{method:'POST',body:JSON.stringify(part)});
+    }
+    // medios de pago de los recibos (hoja opcional): se guardan/actualizan por (empresa, N° de pago)
+    for(const part of chunk(PARSED.medios||[],200)){
+      if(part.length)await sbUpsert('recibos_pago?on_conflict=empresa,nro_pago',part);
     }
     PARSED=null;
     sTab('historial');
