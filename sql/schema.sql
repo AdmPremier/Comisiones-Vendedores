@@ -193,3 +193,10 @@ alter table liquidacion_vendedores enable row level security;
 create policy "anon_all_liquidacion_vendedores" on liquidacion_vendedores for all to anon using (true) with check (true);
 create index if not exists idx_liq_vend_liq on liquidacion_vendedores(liquidacion_id);
 create index if not exists idx_liq_vend_vendedor on liquidacion_vendedores(vendedor_nombre);
+
+-- ------------------------------------------------------------------
+-- Aprobación recibo por recibo (sql/008_detalle_aprobacion.sql) y medios de pago de cada recibo
+-- (sql/007_recibos_pago.sql). En una instalación nueva alcanza con correr esos dos archivos
+-- después de este, o agregar las columnas/tabla a mano.
+-- ------------------------------------------------------------------
+-- alter table liquidacion_detalle add column aprobado boolean not null default false, add column aprobado_por text, add column aprobado_at timestamptz;

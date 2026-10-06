@@ -101,6 +101,29 @@ python -m http.server --directory "C:\Claude\Projects\Comisiones-Vendedores" 876
   "Sin Comisión", y la versión pulida a mano llegaba a 13). Si el encabezado no se reconoce, cae al
   mapeo posicional. Las filas TOTAL se ignoran en las tres hojas, y el preview avisa si hay pagos
   con importe $0 (señal de columnas corridas).
+- **Aprobación recibo por recibo** (8-oct-2026): cada fila de `liquidacion_detalle` tiene `aprobado`
+  (tildado). Dentro de **Ver** de un vendedor se tildan los recibos a aprobar; los tildados suman a
+  la cuenta corriente, el Reporte por Cliente ("solo aprobadas") y los gráficos, y los no tildados
+  quedan pendientes. El estado del vendedor sale de cuántos recibos tiene tildados (Pendiente /
+  Parcial n/m / Aprobada) vía `estadoVisualGrupo()`; `liquidacion_vendedores.estado` se mantiene
+  sincronizado con `sincronizarEstadoGrupo()` ('aprobada' solo si todos están tildados) y manda
+  para "rechazada". Aprobar / Aprobar todo / Rechazar a nivel vendedor siguen existiendo como atajos.
+  Si el vendedor está marcado "Pagada" no se pueden destildar recibos sin revertir esa marca. Una
+  liquidación con recibos aprobados no se puede reemplazar al recargar el Excel.
+  Requiere correr `sql/008_detalle_aprobacion.sql` (columnas + backfill de lo ya aprobado).
+- **Medios de pago de cada recibo** (8-oct-2026): al tocar un número de recibo (en Ver de un
+  vendedor, en el detalle de un período del estado de cuenta, y en el Reporte por Cliente) se abre
+  una segunda ventana con cómo pagó el cliente: efectivo, transferencia (con N° de operación),
+  cheques y echeqs (número, banco, fecha de cobro, importe). Los datos están en la tabla
+  `recibos_pago` (`sql/007_recibos_pago.sql`), clave `(empresa, nro_pago)`, y salen de Odoo
+  (`account.payment` + `l10n_latam.check`). Hoy están cargados Agosto y Septiembre 2026 (47
+  recibos); los recibos cargados a mano (RC, del otro sistema) dicen "sin datos". Para meses nuevos
+  hay que cargarlos: la idea es que la tarea programada agregue una hoja "Medios de pago" al Excel.
+- **Aviso de versión nueva** (8-oct-2026): barra azul fija arriba cuando hay una versión publicada
+  distinta de la cargada (`chequearVersionNueva`, compara el index.html cada 60 s y al volver a la
+  pestaña).
+- **Estado de cuenta por período** (8-oct-2026): en Vendedores → un vendedor, cada mes de
+  "Liquidaciones aprobadas" abre los recibos aprobados que componen esa comisión.
 - **Historial como pantalla inicial, con indicadores y gráficos** (7-oct-2026): al loguearse se
   abre Historial. Arriba tres indicadores (pendiente de aprobar / aprobado a pagar = aprobado −
   pagos registrados / pagado), después la tabla de liquidaciones y abajo un gráfico de barras con la

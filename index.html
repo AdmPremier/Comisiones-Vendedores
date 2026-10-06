@@ -73,6 +73,9 @@ tr.total-row td{font-weight:700;border-top:2px solid #ddd;background:#fafafa}
 .saldo-zero{color:#888;font-weight:700}
 .small{font-size:12px;color:#888}
 .link{color:#1565c0;cursor:pointer;text-decoration:underline}
+#modal2 .modal-overlay{z-index:300}
+.recibo-link{color:#1565c0;cursor:pointer;text-decoration:underline}
+.recibo-link:hover{color:#0d47a1}
 #aviso-version{position:fixed;top:0;left:0;right:0;z-index:500;height:44px;display:flex;align-items:center;justify-content:center;gap:12px;background:#1565c0;color:#fff;font-size:14px;font-weight:500;box-shadow:0 2px 6px rgba(0,0,0,0.2)}
 #aviso-version button{background:#fff;color:#1565c0;border:none;padding:5px 14px;font-weight:600}
 #aviso-version button:hover{background:#e3f2fd}
@@ -125,6 +128,7 @@ body.con-aviso nav{top:44px}
   <main id="mc"><div class="loading">Cargando...</div></main>
 </div>
 <div id="modal"></div>
+<div id="modal2"></div>
 
 <script>
 // ============================================================
@@ -600,10 +604,13 @@ async function confirmarCarga(){
     let liq;
     if(existentes.length){
       liq=existentes[0];
-      const gruposExistentes=await sbFetch('liquidacion_vendedores?liquidacion_id=eq.'+liq.id+'&select=estado');
+      const [gruposExistentes,recibosAprobados]=await Promise.all([
+        sbFetch('liquidacion_vendedores?liquidacion_id=eq.'+liq.id+'&select=estado'),
+        sbFetch('liquidacion_detalle?liquidacion_id=eq.'+liq.id+'&aprobado=eq.true&select=id'),
+      ]);
       const yaDecididos=gruposExistentes.filter(g=>g.estado!=='pendiente');
-      if(yaDecididos.length){
-        prevEl.innerHTML='<div class="alert alert-red">Ya existe una liquidación de '+MESES[mes-1]+' '+anio+' con '+yaDecididos.length+' vendedor(es) ya aprobado(s)/rechazado(s). No se puede sobreescribir desde acá — si hace falta corregir, avisá para hacerlo a mano.</div>';
+      if(yaDecididos.length||recibosAprobados.length){
+        prevEl.innerHTML='<div class="alert alert-red">Ya existe una liquidación de '+MESES[mes-1]+' '+anio+' con aprobaciones hechas ('+recibosAprobados.length+' recibo(s) aprobado(s), '+yaDecididos.length+' vendedor(es) ya decididos). No se puede sobreescribir desde acá — si hace falta corregir, avisá para hacerlo a mano.</div>';
         return;
       }
       if(!confirm('Ya existe una carga pendiente para '+MESES[mes-1]+' '+anio+'. ¿Reemplazarla con este archivo?')){renderCargaPreview();return;}
@@ -649,14 +656,17 @@ async function rHistorialTab(){
     const [liqs,grupos,detalle,pagos]=await Promise.all([
       sbFetch('liquidaciones?select=*&order=anio.desc,mes.desc'),
       sbFetch('liquidacion_vendedores?select=liquidacion_id,vendedor_nombre,estado,pagado'),
-      sbFetch('liquidacion_detalle?select=liquidacion_id,vendedor_nombre,comision_a_pagar'),
+      sbFetch('liquidacion_detalle?select=liquidacion_id,vendedor_nombre,comision_a_pagar,aprobado'),
       sbFetch('pagos_vendedor?select=importe'),
     ]);
     DB.liquidaciones=liqs;
+    const recibos=contarRecibos(detalle);
     const resumenPorLiq={};
     grupos.forEach(g=>{
-      if(!resumenPorLiq[g.liquidacion_id])resumenPorLiq[g.liquidacion_id]={pendiente:0,aprobada:0,rechazada:0};
-      resumenPorLiq[g.liquidacion_id][g.estado]++;
+      if(!resumenPorLiq[g.liquidacion_id])resumenPorLiq[g.liquidacion_id]={pendiente:0,parcial:0,aprobada:0,rechazada:0};
+      const rc=recibos[g.liquidacion_id+'|'+g.vendedor_nombre]||{n:0,a:0};
+      const ev=estadoVisualGrupo(g,rc.n,rc.a);
+      resumenPorLiq[g.liquidacion_id][ev==='pagada'?'aprobada':ev]++;
     });
     HIST_MESES=calcHistorialMeses(liqs,grupos,detalle);
     const kpi=calcKpisHistorial(HIST_MESES,pagos);
@@ -700,15 +710,22 @@ async function rHistorialTab(){
 // ---- Gráficos del Historial ----
 let HIST_MESES=[],HIST_SEL=0,CH_BARRAS=null,CH_DONA=null;
 const COLOR_ESTADO={pendiente:'#ffb74d',aprobada:'#66bb6a',pagada:'#ba68c8',rechazada:'#ef5350'};
-const TEXTO_ESTADO={pendiente:'#f57f17',aprobada:'#2a7a0a',pagada:'#6a1b9a',rechazada:'#c62828'};
-const NOMBRE_ESTADO={pendiente:'Pendiente',aprobada:'Aprobada',pagada:'Pagada',rechazada:'Rechazada'};
+const TEXTO_ESTADO={pendiente:'#f57f17',aprobada:'#2a7a0a',pagada:'#6a1b9a',rechazada:'#c62828',parcial:'#1565c0'};
+const NOMBRE_ESTADO={pendiente:'Pendiente',aprobada:'Aprobada',pagada:'Pagada',rechazada:'Rechazada',parcial:'Parcial'};
 const PALETA_DONA=['#1976d2','#e64a19','#388e3c','#7b1fa2','#fbc02d','#0097a7','#c2185b','#5d4037','#455a64','#afb42b','#00796b','#d84315'];
 
 // Un elemento por liquidación (orden cronológico) con su comisión total, partida por estado del
 // grupo del vendedor (pendiente / aprobada / pagada / rechazada) y por vendedor.
 function calcHistorialMeses(liqs,grupos,detalle){
-  const estadoGrupo={};
-  grupos.forEach(g=>{estadoGrupo[g.liquidacion_id+'|'+g.vendedor_nombre]=(g.estado==='aprobada'&&g.pagado)?'pagada':g.estado;});
+  const grupoDe={};
+  grupos.forEach(g=>{grupoDe[g.liquidacion_id+'|'+g.vendedor_nombre]=g;});
+  // estado de cada recibo: rechazado (vendedor rechazado) > tildado (aprobada / pagada) > pendiente
+  const estadoRecibo=r=>{
+    const g=grupoDe[r.liquidacion_id+'|'+r.vendedor_nombre];
+    if(g&&g.estado==='rechazada')return 'rechazada';
+    if(r.aprobado)return (g&&g.pagado)?'pagada':'aprobada';
+    return 'pendiente';
+  };
   const meses=liqs.slice().sort((a,b)=>a.anio-b.anio||a.mes-b.mes).map(l=>({
     id:l.id,etiqueta:MESES[l.mes-1].slice(0,3)+' '+String(l.anio).slice(2),titulo:MESES[l.mes-1]+' '+l.anio,
     porEstado:{pendiente:0,aprobada:0,pagada:0,rechazada:0},porVendedor:{},total:0
@@ -716,11 +733,12 @@ function calcHistorialMeses(liqs,grupos,detalle){
   const porId={};meses.forEach(m=>{porId[m.id]=m;});
   detalle.forEach(r=>{
     const m=porId[r.liquidacion_id];if(!m)return;
-    const est=estadoGrupo[r.liquidacion_id+'|'+r.vendedor_nombre]||'pendiente';
+    const est=estadoRecibo(r);
     const c=r.comision_a_pagar||0;
     m.porEstado[est]+=c;m.total+=c;
-    if(!m.porVendedor[r.vendedor_nombre])m.porVendedor[r.vendedor_nombre]={monto:0,estado:est};
-    m.porVendedor[r.vendedor_nombre].monto+=c;
+    const pv=m.porVendedor[r.vendedor_nombre]||(m.porVendedor[r.vendedor_nombre]={monto:0,estado:est});
+    pv.monto+=c;
+    if(pv.estado!==est)pv.estado='parcial'; // el vendedor tiene recibos en estados distintos
   });
   return meses;
 }
@@ -815,19 +833,64 @@ function actualizarDonaHistorial(i){
       +'<span class="small" style="min-width:42px;text-align:right">'+(v.monto/m.total*100).toLocaleString('es-AR',{maximumFractionDigits:1})+'%</span></div>';
   }).join('');
 }
-function badgeEstado(e){
+function badgeEstado(e,detalle){
   if(e==='pagada')return '<span class="badge badge-purple">Pagada</span>';
   if(e==='aprobada')return '<span class="badge badge-green">Aprobada</span>';
+  if(e==='parcial')return '<span class="badge" style="background:#e3f2fd;color:#1565c0">Parcial'+(detalle?' '+detalle:'')+'</span>';
   if(e==='rechazada')return '<span class="badge badge-red">Rechazada</span>';
   return '<span class="badge badge-amber">Pendiente</span>';
 }
 function badgeResumenGrupos(r){
   if(!r)return '<span class="badge badge-gray">Sin vendedores</span>';
-  const total=r.pendiente+r.aprobada+r.rechazada;
+  const parc=r.parcial||0;
+  const total=r.pendiente+parc+r.aprobada+r.rechazada;
   if(r.aprobada===total)return '<span class="badge badge-green">Aprobada ('+total+'/'+total+')</span>';
   if(r.rechazada===total)return '<span class="badge badge-red">Rechazada ('+total+'/'+total+')</span>';
   if(r.pendiente===total)return '<span class="badge badge-amber">Pendiente</span>';
-  return '<span class="badge badge-amber">Parcial — '+r.aprobada+' aprob. / '+r.rechazada+' rech. / '+r.pendiente+' pend.</span>';
+  const partes=[];
+  if(r.aprobada)partes.push(r.aprobada+' aprob.');
+  if(parc)partes.push(parc+' parc.');
+  if(r.rechazada)partes.push(r.rechazada+' rech.');
+  if(r.pendiente)partes.push(r.pendiente+' pend.');
+  return '<span class="badge badge-amber">Parcial — '+partes.join(' / ')+'</span>';
+}
+// Aprobación recibo por recibo: cada fila de liquidacion_detalle tiene `aprobado` (tildado).
+// El estado de un vendedor en una liquidación sale de cuántos de sus recibos están tildados; el
+// estado guardado en liquidacion_vendedores solo manda para "rechazada" y para vendedores sin
+// recibos comisionados.
+function estadoVisualGrupo(g,nRecibos,nAprobados){
+  if(g.estado==='rechazada')return 'rechazada';
+  if(nRecibos>0){
+    if(nAprobados===nRecibos)return g.pagado?'pagada':'aprobada';
+    return nAprobados>0?'parcial':'pendiente';
+  }
+  return g.estado==='aprobada'?(g.pagado?'pagada':'aprobada'):'pendiente';
+}
+function contarRecibos(detalle){
+  const m={};
+  detalle.forEach(r=>{
+    const k=r.liquidacion_id+'|'+r.vendedor_nombre;
+    const o=m[k]||(m[k]={n:0,a:0});
+    o.n++;if(r.aprobado)o.a++;
+  });
+  return m;
+}
+// Mantiene liquidacion_vendedores.estado/pagado alineado con los recibos tildados: 'aprobada' solo si
+// TODOS los recibos del vendedor están tildados; si se destilda alguno vuelve a pendiente.
+async function sincronizarEstadoGrupo(liquidacionId,vendedorNombre){
+  const enc=encodeURIComponent(vendedorNombre);
+  const [rows,grupos]=await Promise.all([
+    sbFetch('liquidacion_detalle?liquidacion_id=eq.'+liquidacionId+'&vendedor_nombre=eq.'+enc+'&select=aprobado'),
+    sbFetch('liquidacion_vendedores?liquidacion_id=eq.'+liquidacionId+'&vendedor_nombre=eq.'+enc+'&select=*'),
+  ]);
+  const g=grupos[0];
+  if(!g||!rows.length)return;
+  const todos=rows.every(r=>r.aprobado),alguno=rows.some(r=>r.aprobado);
+  let patch=null;
+  if(todos&&g.estado!=='aprobada')patch={estado:'aprobada',revisado_por:CU.label,revisado_at:new Date().toISOString(),motivo_rechazo:null};
+  else if(!todos&&g.estado==='aprobada')patch={estado:'pendiente',pagado:false,pagado_por:null,pagado_at:null};
+  else if(!todos&&g.estado==='rechazada'&&alguno)patch={estado:'pendiente',motivo_rechazo:null};
+  if(patch)await sbFetch('liquidacion_vendedores?id=eq.'+g.id,{method:'PATCH',body:JSON.stringify(patch)});
 }
 
 // ============================================================
@@ -861,36 +924,42 @@ async function verLiquidacion(id){
     });
     const totales=Object.values(resumen).reduce((a,v)=>({base:a.base+v.base,comision:a.comision+v.comision,cantCom:a.cantCom+v.cantCom,cantRev:a.cantRev+v.cantRev,baseRev:a.baseRev+v.baseRev}),{base:0,comision:0,cantCom:0,cantRev:0,baseRev:0});
 
-    const pendientesCount=grupos.filter(g=>g.estado==='pendiente').length;
+    // Estado de cada vendedor según sus recibos tildados (ver estadoVisualGrupo)
+    const aprobPorVend={};
+    detalle.forEach(r=>{aprobPorVend[r.vendedor_nombre]=(aprobPorVend[r.vendedor_nombre]||0)+(r.aprobado?1:0);});
+    const evDe=g=>estadoVisualGrupo(g,resumen[g.vendedor_nombre]?resumen[g.vendedor_nombre].cantCom:0,aprobPorVend[g.vendedor_nombre]||0);
+    const conteo={pendiente:0,parcial:0,aprobada:0,rechazada:0};
+    grupos.forEach(g=>{const ev=evDe(g);conteo[ev==='pagada'?'aprobada':ev]++;});
+    const pendientesCount=conteo.pendiente+conteo.parcial;
 
     document.getElementById('mc').innerHTML=`
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
         <h2 class="section-title" style="margin-bottom:0">${MESES[liq.mes-1]} ${liq.anio}</h2>
-        ${badgeResumenGrupos({pendiente:grupos.filter(g=>g.estado==='pendiente').length,aprobada:grupos.filter(g=>g.estado==='aprobada').length,rechazada:grupos.filter(g=>g.estado==='rechazada').length})}
+        ${badgeResumenGrupos(conteo)}
       </div>
       <p class="small" style="margin-bottom:16px">Cargado por ${esc(liq.cargado_por||'—')} el ${new Date(liq.created_at).toLocaleDateString('es-AR')}${liq.archivo_nombre?' · archivo: '+esc(liq.archivo_nombre):''}</p>
-      <p class="small" style="margin-bottom:16px">La aprobación es <b>por vendedor</b> — mirá la columna Acción en la tabla de abajo.${pendientesCount>1?' <span class="link" onclick="aprobarTodosPendientes('+id+')">Aprobar los '+pendientesCount+' pendientes de un saque →</span>':''}</p>
+      <p class="small" style="margin-bottom:16px">Se aprueba <b>recibo por recibo</b>: entrá con <b>Ver</b> a cada vendedor y tildá los recibos que querés aprobar (los que no tildes quedan pendientes), o aprobá todo de una con el botón Aprobar.${pendientesCount>1?' <span class="link" onclick="aprobarTodosPendientes('+id+')">Aprobar todo lo pendiente de los '+pendientesCount+' vendedores →</span>':''}</p>
 
       <h3 style="font-size:15px;font-weight:600;margin:20px 0 10px">Resumen por Vendedor</h3>
       <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Vendedor</th><th>%</th><th>Pagos c/comisión</th><th>Base Comisionable</th><th>Comisión a Pagar</th><th>Pagos a revisar</th><th>Base pendiente</th><th></th><th>Estado</th><th>Acción</th></tr></thead>
       <tbody>
         ${Object.entries(resumen).map(([k,v])=>{
           const g=grupoPorVendedor[k];
+          const estadoVisual=g?evDe(g):null;
           let accion='';
           if(g){
-            if(g.estado==='pendiente')accion='<button class="danger" style="font-size:12px;padding:4px 10px" onclick="rechazarGrupoVendedor('+g.id+')">Rechazar</button> <button class="success" style="font-size:12px;padding:4px 10px" onclick="aprobarGrupoVendedor('+g.id+')">Aprobar</button>';
-            else if(g.estado==='aprobada'&&!g.pagado)accion='<button style="font-size:12px;padding:4px 10px;color:#6a1b9a;border-color:#ce93d8" onclick="marcarPagadoGrupo('+g.id+')">Marcar pagada</button>';
-            else if(g.estado==='aprobada'&&g.pagado)accion='<span class="link small" onclick="revertirPagadoGrupo('+g.id+')">revertir</span>';
+            if(estadoVisual==='pendiente'||estadoVisual==='parcial')accion='<button class="danger" style="font-size:12px;padding:4px 10px" onclick="rechazarGrupoVendedor('+g.id+')">Rechazar</button> <button class="success" style="font-size:12px;padding:4px 10px" onclick="aprobarGrupoVendedor('+g.id+')">Aprobar'+(estadoVisual==='parcial'?' todo':'')+'</button>';
+            else if(estadoVisual==='aprobada')accion='<button style="font-size:12px;padding:4px 10px;color:#6a1b9a;border-color:#ce93d8" onclick="marcarPagadoGrupo('+g.id+')">Marcar pagada</button>';
+            else if(estadoVisual==='pagada')accion='<span class="link small" onclick="revertirPagadoGrupo('+g.id+')">revertir</span>';
           }
           const motivo=g&&g.estado==='rechazada'&&g.motivo_rechazo?'<div class="small" style="color:#c62828;white-space:normal">'+esc(g.motivo_rechazo)+'</div>':'';
-          const estadoVisual=g?(g.estado==='aprobada'&&g.pagado?'pagada':g.estado):null;
           let ver='';
           if(g&&(v.cantCom>0||v.cantRev>0)){
             ver=v.cantRev>0
               ?'<button class="danger" style="font-size:12px;padding:4px 10px" onclick="verComisionVendedor('+g.id+')">⚠ Revisar</button>'
               :'<button style="font-size:12px;padding:4px 10px" onclick="verComisionVendedor('+g.id+')">Ver</button>';
           }
-          return '<tr><td>'+esc(k)+'</td><td>'+(v.pct!=null?v.pct+'%':'—')+'</td><td>'+v.cantCom+'</td><td>'+fmt(v.base)+'</td><td>'+fmt(v.comision)+'</td><td>'+v.cantRev+'</td><td>'+fmt(v.baseRev)+'</td><td>'+ver+'</td><td>'+(g?badgeEstado(estadoVisual):'<span class="badge badge-gray">—</span>')+motivo+'</td><td>'+accion+'</td></tr>';
+          return '<tr><td>'+esc(k)+'</td><td>'+(v.pct!=null?v.pct+'%':'—')+'</td><td>'+v.cantCom+'</td><td>'+fmt(v.base)+'</td><td>'+fmt(v.comision)+'</td><td>'+v.cantRev+'</td><td>'+fmt(v.baseRev)+'</td><td>'+ver+'</td><td>'+(g?badgeEstado(estadoVisual,estadoVisual==='parcial'?(aprobPorVend[k]||0)+'/'+v.cantCom:''):'<span class="badge badge-gray">—</span>')+motivo+'</td><td>'+accion+'</td></tr>';
         }).join('')}
         <tr class="total-row"><td>TOTAL</td><td></td><td>${totales.cantCom}</td><td>${fmt(totales.base)}</td><td>${fmt(totales.comision)}</td><td>${totales.cantRev}</td><td>${fmt(totales.baseRev)}</td><td></td><td></td><td></td></tr>
       </tbody></table></div>
@@ -937,13 +1006,15 @@ async function verComisionVendedor(grupoId){
     const pctVendedor=vendedor?vendedor.pct_comision:0;
 
     COMISION_CTX={};
+    COMISION_GRUPO={liquidacionId:g.liquidacion_id,vendedor:g.vendedor_nombre,pagado:!!g.pagado};
     const filas=[];
     detRows.forEach(r=>{
       const key='d'+r.id;
       const tipo=TIPOS_VALIDOS.includes(r.tipo_doc)?r.tipo_doc:'';
       COMISION_CTX[key]={origin:'detalle',rowId:r.id,liquidacion_id:g.liquidacion_id,vendedor_nombre:g.vendedor_nombre,
         empresa:r.empresa,fecha_pago:r.fecha_pago,cliente:r.cliente,nro_pago:r.nro_pago,documento:r.nro_documento,
-        importe:r.importe_pago,pct:r.pct_comision,original:tipo,current:tipo};
+        importe:r.importe_pago,pct:r.pct_comision,original:tipo,current:tipo,
+        aprobO:!!r.aprobado,aprobC:!!r.aprobado};
       filas.push(key);
     });
     revRows.forEach(r=>{
@@ -951,10 +1022,11 @@ async function verComisionVendedor(grupoId){
       const documento=String(r.motivo||'').replace(/^Comisión sin definir todavía( — )?/,'');
       COMISION_CTX[key]={origin:'sin_comision',rowId:r.id,liquidacion_id:g.liquidacion_id,vendedor_nombre:g.vendedor_nombre,
         empresa:r.empresa,fecha_pago:r.fecha_pago,cliente:r.cliente,nro_pago:r.nro_pago,documento,
-        importe:r.importe,pct:pctVendedor,original:'',current:''};
+        importe:r.importe,pct:pctVendedor,original:'',current:'',aprobO:false,aprobC:false};
       filas.push(key);
     });
     filas.sort((a,b)=>(COMISION_CTX[a].cliente||'').localeCompare(COMISION_CTX[b].cliente||''));
+    const hayAprobables=detRows.length>0;
 
     const opcionesTipo=t=>['','A','B','A/B','CHR'].map(v=>'<option value="'+v+'"'+(v===t?' selected':'')+'>'+(v===''?'— Elegir —':v==='A'?'A · Factura':v==='B'?'B · NOF':v==='A/B'?'A/B · Mixto':'CHR · Rechazado')+'</option>').join('');
 
@@ -962,12 +1034,14 @@ async function verComisionVendedor(grupoId){
       <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
         <div class="modal" style="max-width:1050px">
           <div class="modal-title">${esc(g.vendedor_nombre)} — comisión de este mes</div>
-          <p class="small" style="margin-bottom:12px">Podés cambiar el Tipo de cualquier fila (incluidas las ya resueltas) — es reversible, elegir "— Elegir —" la vuelve a mandar a revisar. No se guarda nada hasta tocar "Guardar cambios".</p>
-          <div class="table-wrap" style="margin-bottom:16px;max-height:420px;overflow-y:auto"><table><thead><tr><th>Empresa</th><th>Fecha</th><th>Cliente</th><th>N° Pago</th><th>Doc. / Motivo</th><th>Importe</th><th>Tipo</th><th>Comisión</th></tr></thead>
-          <tbody>${filas.length===0?'<tr><td colspan="8" class="small" style="white-space:normal">Sin filas.</td></tr>':filas.map(key=>{
+          <p class="small" style="margin-bottom:6px"><b>Tildá los recibos que querés aprobar</b>: los tildados suman a la cuenta corriente del vendedor y los que no tildes quedan pendientes. Tocá el número de un recibo para ver cómo pagó el cliente.</p>
+          <p class="small" style="margin-bottom:12px">También podés cambiar el Tipo de cualquier fila (es reversible: "— Elegir —" la vuelve a mandar a revisar). No se guarda nada hasta tocar "Guardar cambios".${g.pagado?' <b style="color:#6a1b9a">Este vendedor está marcado como Pagada: para destildar recibos primero revertí esa marca.</b>':''}</p>
+          <div class="table-wrap" style="margin-bottom:16px;max-height:420px;overflow-y:auto"><table><thead><tr><th style="text-align:center">${hayAprobables?'<input type="checkbox" id="caprobar-todos" title="Tildar / destildar todos" style="width:auto" onchange="tildarTodosRecibos(this.checked)"><div style="font-size:10px">Aprobar</div>':''}</th><th>Empresa</th><th>Fecha</th><th>Cliente</th><th>Recibo</th><th>Doc. / Motivo</th><th>Importe</th><th>Tipo</th><th>Comisión</th></tr></thead>
+          <tbody>${filas.length===0?'<tr><td colspan="9" class="small" style="white-space:normal">Sin filas.</td></tr>':filas.map(key=>{
             const c=COMISION_CTX[key];
-            return `<tr id="crow-${key}"${c.original?'':' style="background:#fff5f5"'}>
-              <td>${esc(c.empresa)}</td><td>${fmtFecha(c.fecha_pago)}</td><td>${esc(c.cliente)}</td><td>${esc(c.nro_pago)}</td><td>${esc(c.documento)}</td><td>${fmt(c.importe)}</td>
+            return `<tr id="crow-${key}" style="background:${colorFilaComision(c)}">
+              <td style="text-align:center">${c.origin==='detalle'?`<input type="checkbox" id="caprob-${key}" style="width:auto" ${c.aprobC?'checked':''} onchange="onCambioAprobacion('${key}')">`:'<span class="small" title="Sin comisión definida: no se puede aprobar todavía">—</span>'}</td>
+              <td>${esc(c.empresa)}</td><td>${fmtFecha(c.fecha_pago)}</td><td>${esc(c.cliente)}</td><td>${reciboLink(c.empresa,c.nro_pago)}</td><td>${esc(c.documento)}</td><td>${fmt(c.importe)}</td>
               <td><select id="ctipo-${key}" style="width:auto" onchange="onCambioTipoComision('${key}')">${opcionesTipo(c.original)}</select></td>
               <td id="ccalc-${key}" class="small">${calcTextoComision(c.original,c.importe,c.pct)}</td>
             </tr>`;
@@ -980,25 +1054,59 @@ async function verComisionVendedor(grupoId){
       </div>`;
   }catch(e){alert('Error: '+e.message);}
 }
+let COMISION_GRUPO=null;
+const filaTocada=c=>c.current!==c.original||c.aprobC!==c.aprobO;
+// verde claro = recibo aprobado; rojo claro = sin comisión definida; ámbar = cambio sin guardar
+function colorFilaComision(c){
+  if(filaTocada(c))return '#fff8e1';
+  if(!c.original)return '#fff5f5';
+  return c.aprobC?'#f1f8f1':'';
+}
+function refrescarFilaComision(key){
+  const c=COMISION_CTX[key];
+  const row=document.getElementById('crow-'+key);
+  if(row)row.style.background=colorFilaComision(c);
+  const n=Object.values(COMISION_CTX).filter(filaTocada).length;
+  const btn=document.getElementById('cguardar-btn');
+  if(btn){btn.disabled=n===0;btn.textContent=n>0?'Guardar cambios ('+n+')':'Guardar cambios';}
+}
 function onCambioTipoComision(key){
   const ctx=COMISION_CTX[key];
   if(!ctx)return;
   ctx.current=document.getElementById('ctipo-'+key).value;
   document.getElementById('ccalc-'+key).innerHTML=calcTextoComision(ctx.current,ctx.importe,ctx.pct);
-  const dirty=ctx.current!==ctx.original;
-  const row=document.getElementById('crow-'+key);
-  if(row)row.style.background=dirty?'#fff8e1':(ctx.original?'':'#fff5f5');
-  const n=Object.values(COMISION_CTX).filter(c=>c.current!==c.original).length;
-  const btn=document.getElementById('cguardar-btn');
-  if(btn){btn.disabled=n===0;btn.textContent=n>0?'Guardar cambios ('+n+')':'Guardar cambios';}
+  if(!ctx.current&&ctx.origin==='detalle'){ // pasa a "sin comisión": ya no puede estar aprobada
+    ctx.aprobC=false;const cb=document.getElementById('caprob-'+key);if(cb)cb.checked=false;
+  }
+  refrescarFilaComision(key);
+}
+function onCambioAprobacion(key){
+  const ctx=COMISION_CTX[key];
+  if(!ctx)return;
+  ctx.aprobC=document.getElementById('caprob-'+key).checked;
+  refrescarFilaComision(key);
+}
+function tildarTodosRecibos(valor){
+  Object.keys(COMISION_CTX).forEach(key=>{
+    const ctx=COMISION_CTX[key];
+    if(ctx.origin!=='detalle'||!ctx.current)return; // solo recibos con comisión definida
+    ctx.aprobC=valor;
+    const cb=document.getElementById('caprob-'+key);if(cb)cb.checked=valor;
+    refrescarFilaComision(key);
+  });
 }
 async function guardarCambiosComision(liquidacionId){
-  const cambios=Object.values(COMISION_CTX).filter(c=>c.current!==c.original);
+  const cambios=Object.values(COMISION_CTX).filter(filaTocada);
   if(!cambios.length)return;
+  if(COMISION_GRUPO&&COMISION_GRUPO.pagado&&cambios.some(c=>c.aprobO&&!c.aprobC)){
+    alert('Este vendedor está marcado como Pagada. Para destildar recibos primero revertí la marca "Pagada" en la liquidación.');
+    return;
+  }
   if(!confirm('¿Guardar '+cambios.length+' cambio(s)?'))return;
   const btn=document.getElementById('cguardar-btn');
   if(btn){btn.disabled=true;btn.textContent='Guardando...';}
   try{
+    const campoAprob=c=>c.aprobC?{aprobado:true,aprobado_por:CU.label,aprobado_at:new Date().toISOString()}:{aprobado:false,aprobado_por:null,aprobado_at:null};
     for(const ctx of cambios){
       if(ctx.current&&ctx.origin==='sin_comision'){
         // se resuelve: pasa de "Sin Comisión" a "Detalle"
@@ -1011,9 +1119,13 @@ async function guardarCambiosComision(liquidacionId){
         })});
         await sbFetch('liquidacion_sin_comision?id=eq.'+ctx.rowId,{method:'DELETE'});
       }else if(ctx.current&&ctx.origin==='detalle'){
-        // ya estaba resuelta, se reclasifica a otro tipo
-        const r=calcularComisionTipo(ctx.current,ctx.importe,ctx.pct);
-        await sbFetch('liquidacion_detalle?id=eq.'+ctx.rowId,{method:'PATCH',body:JSON.stringify({tipo_doc:ctx.current,base_comisionable:r.base,comision_a_pagar:r.comision})});
+        // ya estaba resuelta: se reclasifica a otro tipo y/o se cambia su aprobación (tilde)
+        const patch={...campoAprob(ctx)};
+        if(ctx.current!==ctx.original){
+          const r=calcularComisionTipo(ctx.current,ctx.importe,ctx.pct);
+          Object.assign(patch,{tipo_doc:ctx.current,base_comisionable:r.base,comision_a_pagar:r.comision});
+        }
+        await sbFetch('liquidacion_detalle?id=eq.'+ctx.rowId,{method:'PATCH',body:JSON.stringify(patch)});
       }else if(!ctx.current&&ctx.origin==='detalle'){
         // se revierte: vuelve de "Detalle" a "Sin Comisión"
         await sbFetch('liquidacion_sin_comision',{method:'POST',body:JSON.stringify({
@@ -1024,17 +1136,25 @@ async function guardarCambiosComision(liquidacionId){
         await sbFetch('liquidacion_detalle?id=eq.'+ctx.rowId,{method:'DELETE'});
       }
     }
+    // el estado del vendedor (aprobada / pendiente) sale de cuántos recibos quedaron tildados
+    await sincronizarEstadoGrupo(liquidacionId,COMISION_GRUPO.vendedor);
     closeModal();
     verLiquidacion(liquidacionId);
   }catch(e){alert('Error: '+e.message);if(btn){btn.disabled=false;btn.textContent='Guardar cambios';}}
 }
 
 // Aprobación / rechazo por vendedor dentro de la liquidación (liquidacion_vendedores.id).
+// Tilda todos los recibos comisionados de un vendedor en una liquidación (aprobado=true).
+async function aprobarRecibosVendedor(liquidacionId,vendedorNombre){
+  await sbFetch('liquidacion_detalle?liquidacion_id=eq.'+liquidacionId+'&vendedor_nombre=eq.'+encodeURIComponent(vendedorNombre)+'&aprobado=eq.false',
+    {method:'PATCH',body:JSON.stringify({aprobado:true,aprobado_por:CU.label,aprobado_at:new Date().toISOString()})});
+}
 async function aprobarGrupoVendedor(grupoId){
   try{
-    const rows=await sbFetch('liquidacion_vendedores?id=eq.'+grupoId+'&select=liquidacion_id');
+    const g=(await sbFetch('liquidacion_vendedores?id=eq.'+grupoId+'&select=*'))[0];
+    await aprobarRecibosVendedor(g.liquidacion_id,g.vendedor_nombre);
     await sbFetch('liquidacion_vendedores?id=eq.'+grupoId,{method:'PATCH',body:JSON.stringify({estado:'aprobada',revisado_por:CU.label,revisado_at:new Date().toISOString(),motivo_rechazo:null})});
-    verLiquidacion(rows[0].liquidacion_id);
+    verLiquidacion(g.liquidacion_id);
   }catch(e){alert('Error: '+e.message);}
 }
 function rechazarGrupoVendedor(grupoId){
@@ -1051,16 +1171,23 @@ async function confirmarRechazoGrupo(grupoId){
   const motivo=document.getElementById('motivo-rechazo').value.trim();
   if(!motivo){alert('Ingresá un motivo');return;}
   try{
-    const rows=await sbFetch('liquidacion_vendedores?id=eq.'+grupoId+'&select=liquidacion_id');
-    await sbFetch('liquidacion_vendedores?id=eq.'+grupoId,{method:'PATCH',body:JSON.stringify({estado:'rechazada',revisado_por:CU.label,revisado_at:new Date().toISOString(),motivo_rechazo:motivo})});
+    const g=(await sbFetch('liquidacion_vendedores?id=eq.'+grupoId+'&select=*'))[0];
+    // al rechazar al vendedor se destildan sus recibos (no suman a la cuenta corriente)
+    await sbFetch('liquidacion_detalle?liquidacion_id=eq.'+g.liquidacion_id+'&vendedor_nombre=eq.'+encodeURIComponent(g.vendedor_nombre),
+      {method:'PATCH',body:JSON.stringify({aprobado:false,aprobado_por:null,aprobado_at:null})});
+    await sbFetch('liquidacion_vendedores?id=eq.'+grupoId,{method:'PATCH',body:JSON.stringify({estado:'rechazada',revisado_por:CU.label,revisado_at:new Date().toISOString(),motivo_rechazo:motivo,pagado:false,pagado_por:null,pagado_at:null})});
     closeModal();
-    verLiquidacion(rows[0].liquidacion_id);
+    verLiquidacion(g.liquidacion_id);
   }catch(e){alert('Error: '+e.message);}
 }
 async function aprobarTodosPendientes(liquidacionId){
-  if(!confirm('¿Aprobar todos los vendedores pendientes de este mes? Los que ya estén aprobados o rechazados no se tocan.'))return;
+  if(!confirm('¿Aprobar todo lo pendiente de este mes (todos los recibos sin tildar de cada vendedor)? Los vendedores rechazados no se tocan.'))return;
   try{
-    await sbFetch('liquidacion_vendedores?liquidacion_id=eq.'+liquidacionId+'&estado=eq.pendiente',{method:'PATCH',body:JSON.stringify({estado:'aprobada',revisado_por:CU.label,revisado_at:new Date().toISOString()})});
+    const grupos=await sbFetch('liquidacion_vendedores?liquidacion_id=eq.'+liquidacionId+'&estado=neq.rechazada&select=*');
+    for(const g of grupos){
+      await aprobarRecibosVendedor(liquidacionId,g.vendedor_nombre);
+      if(g.estado!=='aprobada')await sbFetch('liquidacion_vendedores?id=eq.'+g.id,{method:'PATCH',body:JSON.stringify({estado:'aprobada',revisado_por:CU.label,revisado_at:new Date().toISOString()})});
+    }
     verLiquidacion(liquidacionId);
   }catch(e){alert('Error: '+e.message);}
 }
@@ -1115,12 +1242,8 @@ async function rReporteContent(){
   try{
     let rows;
     if(sel==='aprobadas'){
-      const gruposAprobados=await sbFetch('liquidacion_vendedores?select=liquidacion_id,vendedor_nombre&estado=eq.aprobada');
-      if(!gruposAprobados.length){el.innerHTML='<p class="small">Todavía no hay ningún vendedor aprobado en ninguna liquidación.</p>';return;}
-      const idsConAprobados=[...new Set(gruposAprobados.map(g=>g.liquidacion_id))];
-      const aprobadoKeys=new Set(gruposAprobados.map(g=>g.liquidacion_id+'|'+g.vendedor_nombre));
-      const all=await sbFetch('liquidacion_detalle?select=*&liquidacion_id=in.('+idsConAprobados.join(',')+')&order=cliente.asc');
-      rows=all.filter(r=>aprobadoKeys.has(r.liquidacion_id+'|'+r.vendedor_nombre));
+      rows=await sbFetch('liquidacion_detalle?select=*&aprobado=eq.true&order=cliente.asc');
+      if(!rows.length){el.innerHTML='<p class="small">Todavía no hay ningún recibo aprobado en ninguna liquidación.</p>';return;}
     }else{
       rows=await sbFetch('liquidacion_detalle?select=*&liquidacion_id=eq.'+sel+'&order=cliente.asc');
     }
@@ -1147,7 +1270,7 @@ async function rReporteContent(){
         </div>
         <div id="${gid}" class="hidden" style="margin-top:12px">
           <div class="table-wrap"><table><thead><tr><th>Vendedor</th><th>Empresa</th><th>Fecha</th><th>N° Pago</th><th>Tipo</th><th>N° Doc.</th><th>Importe Pago</th><th>Base Comis.</th><th>Comisión</th></tr></thead>
-          <tbody>${d.rows.map(r=>'<tr><td>'+esc(r.vendedor_nombre)+'</td><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+esc(r.tipo_doc)+'</td><td>'+esc(r.nro_documento)+'</td><td>'+fmt(r.importe_pago)+'</td><td>'+fmt(r.base_comisionable)+'</td><td>'+fmt(r.comision_a_pagar)+'</td></tr>').join('')}</tbody></table></div>
+          <tbody>${d.rows.map(r=>'<tr><td>'+esc(r.vendedor_nombre)+'</td><td>'+esc(r.empresa)+'</td><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+reciboLink(r.empresa,r.nro_pago)+'</td><td>'+esc(r.tipo_doc)+'</td><td>'+esc(r.nro_documento)+'</td><td>'+fmt(r.importe_pago)+'</td><td>'+fmt(r.base_comisionable)+'</td><td>'+fmt(r.comision_a_pagar)+'</td></tr>').join('')}</tbody></table></div>
         </div>
       </div>`;
     }).join('');
@@ -1222,15 +1345,13 @@ async function rExcluidosContent(){
 async function rVendedoresTab(){
   document.getElementById('mc').innerHTML='<div class="loading">Cargando...</div>';
   try{
-    const [gruposAprobados,detalle,pagos]=await Promise.all([
-      sbFetch('liquidacion_vendedores?select=liquidacion_id,vendedor_nombre&estado=eq.aprobada'),
-      sbFetch('liquidacion_detalle?select=vendedor_nombre,comision_a_pagar,liquidacion_id'),
+    // la cuenta corriente suma solo los recibos aprobados (tildados)
+    const [detalle,pagos]=await Promise.all([
+      sbFetch('liquidacion_detalle?select=vendedor_nombre,comision_a_pagar&aprobado=eq.true'),
       sbFetch('pagos_vendedor?select=*'),
     ]);
-    const aprobadoKeys=new Set(gruposAprobados.map(g=>g.liquidacion_id+'|'+g.vendedor_nombre));
     const acumPorVendedor={},pagadoPorVendedor={};
     detalle.forEach(r=>{
-      if(!aprobadoKeys.has(r.liquidacion_id+'|'+r.vendedor_nombre))return;
       acumPorVendedor[r.vendedor_nombre]=(acumPorVendedor[r.vendedor_nombre]||0)+r.comision_a_pagar;
     });
     pagos.forEach(p=>{pagadoPorVendedor[p.vendedor_nombre]=(pagadoPorVendedor[p.vendedor_nombre]||0)+p.importe;});
@@ -1252,17 +1373,14 @@ async function verVendedor(vendedorId){
   if(!v)return;
   document.getElementById('mc').innerHTML='<div class="loading">Cargando...</div>';
   try{
-    const [liqsTodas,gruposAprobados,detalle,pagos]=await Promise.all([
+    const [liqsTodas,detalle,pagos]=await Promise.all([
       sbFetch('liquidaciones?select=*&order=anio.desc,mes.desc'),
-      sbFetch('liquidacion_vendedores?select=liquidacion_id&estado=eq.aprobada&vendedor_nombre=eq.'+encodeURIComponent(v.nombre_mostrar)),
-      sbFetch('liquidacion_detalle?select=liquidacion_id,comision_a_pagar,base_comisionable&vendedor_nombre=eq.'+encodeURIComponent(v.nombre_mostrar)),
+      sbFetch('liquidacion_detalle?select=liquidacion_id,comision_a_pagar,base_comisionable&aprobado=eq.true&vendedor_nombre=eq.'+encodeURIComponent(v.nombre_mostrar)),
       sbFetch('pagos_vendedor?select=*&vendedor_nombre=eq.'+encodeURIComponent(v.nombre_mostrar)+'&order=fecha.desc'),
     ]);
-    const idsAprobados=new Set(gruposAprobados.map(g=>g.liquidacion_id));
-    const liqs=liqsTodas.filter(l=>idsAprobados.has(l.id));
     const porLiq={};
-    detalle.forEach(r=>{if(!idsAprobados.has(r.liquidacion_id))return;if(!porLiq[r.liquidacion_id])porLiq[r.liquidacion_id]={base:0,comision:0};porLiq[r.liquidacion_id].base+=r.base_comisionable;porLiq[r.liquidacion_id].comision+=r.comision_a_pagar;});
-    const liqsConDatos=liqs.filter(l=>porLiq[l.id]);
+    detalle.forEach(r=>{if(!porLiq[r.liquidacion_id])porLiq[r.liquidacion_id]={base:0,comision:0};porLiq[r.liquidacion_id].base+=r.base_comisionable;porLiq[r.liquidacion_id].comision+=r.comision_a_pagar;});
+    const liqsConDatos=liqsTodas.filter(l=>porLiq[l.id]);
     const totalAcum=liqsConDatos.reduce((a,l)=>a+porLiq[l.id].comision,0);
     const totalPagado=pagos.reduce((a,p)=>a+p.importe,0);
     const saldo=totalAcum-totalPagado;
@@ -1448,6 +1566,63 @@ function rImplBadge(){
 }
 
 // ============================================================
+// MEDIOS DE PAGO DE UN RECIBO (cómo pagó el cliente)
+// ============================================================
+// Los datos viven en la tabla recibos_pago (salen de Odoo: account.payment + l10n_latam.check).
+// Se abren en una segunda ventana (#modal2) para no pisar la ventana desde la que se tocó el recibo.
+let RECIBOS_CACHE=null;
+function claveRecibo(empresa,nro){return normKey(empresa)+'|'+String(nro||'').trim();}
+async function cargarRecibosPago(){
+  if(RECIBOS_CACHE)return RECIBOS_CACHE;
+  const rows=await sbFetch('recibos_pago?select=*');
+  RECIBOS_CACHE={};
+  rows.forEach(r=>{RECIBOS_CACHE[claveRecibo(r.empresa,r.nro_pago)]=r;});
+  return RECIBOS_CACHE;
+}
+// Número de recibo clickeable (se resuelve con un listener delegado, ver más abajo).
+function reciboLink(empresa,nro){
+  if(!nro)return '';
+  return '<span class="recibo-link" data-emp="'+esc(empresa)+'" data-nro="'+esc(nro)+'" title="Ver cómo pagó el cliente">'+esc(nro)+'</span>';
+}
+document.addEventListener('click',e=>{
+  const el=e.target.closest&&e.target.closest('.recibo-link');
+  if(el){e.stopPropagation();verMediosRecibo(el.dataset.emp,el.dataset.nro);}
+});
+function closeModal2(){document.getElementById('modal2').innerHTML='';}
+async function verMediosRecibo(empresa,nro){
+  let r=null;
+  try{r=(await cargarRecibosPago())[claveRecibo(empresa,nro)]||null;}
+  catch(e){document.getElementById('modal2').innerHTML=modalSimple('Recibo '+esc(nro),'<div class="alert alert-red">No se pudieron leer los medios de pago: '+esc(e.message)+'</div>');return;}
+  if(!r){
+    document.getElementById('modal2').innerHTML=modalSimple('Recibo '+esc(nro),
+      '<p class="small">No hay datos de medios de pago para este recibo. Puede ser un recibo cargado a mano o del sistema anterior (no está en Odoo), o de un mes que todavía no se importó.</p>');
+    return;
+  }
+  const cheques=Array.isArray(r.cheques)?r.cheques:[];
+  const totalCh=cheques.reduce((a,c)=>a+(c.importe||0),0);
+  const fila=(k,v)=>v?'<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px solid #f0f0f0"><span class="small" style="width:120px;flex:none">'+k+'</span><span>'+v+'</span></div>':'';
+  const etiquetaMedio=r.medio==='Cheque'?'Cheque(s)':r.medio==='Echeq'?'Echeq(s)':esc(r.medio||'—');
+  const cuerpo=
+    fila('Empresa',esc(r.empresa))+fila('Fecha',fmtFecha(r.fecha))+fila('Cliente',esc(r.cliente||'—'))
+    +fila('Importe del recibo','<b>'+fmt(r.importe)+'</b>')+fila('Medio de pago','<b>'+etiquetaMedio+'</b>')
+    +fila('Diario / cuenta',esc(r.diario||''))+fila(r.medio==='Transferencia'||r.medio==='Transferencia / depósito'?'N° de operación':'Referencia',esc(r.referencia||''))
+    +(cheques.length?`
+      <div style="font-size:13px;font-weight:600;margin:16px 0 6px;color:#666">${cheques.length} ${r.medio==='Echeq'?'ECHEQ'+(cheques.length>1?'S':''):'CHEQUE'+(cheques.length>1?'S':'')}</div>
+      <div class="table-wrap"><table><thead><tr><th>N°</th><th>Banco</th><th>Fecha de cobro</th><th>Importe</th></tr></thead>
+      <tbody>${cheques.map(c=>'<tr><td>'+esc(c.numero)+'</td><td>'+esc(c.banco||'—')+'</td><td>'+fmtFecha(c.fecha_cobro)+'</td><td>'+fmt(c.importe)+'</td></tr>').join('')}
+      <tr class="total-row"><td colspan="3">TOTAL</td><td>${fmt(totalCh)}</td></tr></tbody></table></div>`:'');
+  document.getElementById('modal2').innerHTML=modalSimple('Recibo '+esc(r.nro_pago),cuerpo);
+}
+function modalSimple(titulo,cuerpoHtml){
+  return `<div class="modal-overlay" onclick="if(event.target===this)closeModal2()">
+    <div class="modal" style="max-width:620px">
+      <div class="modal-title">${titulo}</div>
+      ${cuerpoHtml}
+      <div style="text-align:right;margin-top:16px"><button onclick="closeModal2()">Cerrar</button></div>
+    </div></div>`;
+}
+
+// ============================================================
 // ESTADO DE CUENTA: RECIBOS QUE COMPONEN LA COMISIÓN DE UN PERÍODO
 // ============================================================
 async function verRecibosPeriodo(liquidacionId,vendedorId){
@@ -1456,7 +1631,7 @@ async function verRecibosPeriodo(liquidacionId,vendedorId){
   try{
     const [liqs,rows]=await Promise.all([
       sbFetch('liquidaciones?id=eq.'+liquidacionId+'&select=mes,anio'),
-      sbFetch('liquidacion_detalle?liquidacion_id=eq.'+liquidacionId+'&vendedor_nombre=eq.'+encodeURIComponent(v.nombre_mostrar)+'&select=*&order=fecha_pago.asc,cliente.asc'),
+      sbFetch('liquidacion_detalle?liquidacion_id=eq.'+liquidacionId+'&aprobado=eq.true&vendedor_nombre=eq.'+encodeURIComponent(v.nombre_mostrar)+'&select=*&order=fecha_pago.asc,cliente.asc'),
     ]);
     const l=liqs[0];
     const total=rows.reduce((a,r)=>a+(r.comision_a_pagar||0),0);
@@ -1465,9 +1640,9 @@ async function verRecibosPeriodo(liquidacionId,vendedorId){
       <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
         <div class="modal" style="max-width:1000px">
           <div class="modal-title">${esc(v.nombre_mostrar)} — ${MESES[l.mes-1]} ${l.anio}</div>
-          <p class="small" style="margin-bottom:12px">Recibos cobrados que componen esta comisión de <b>${fmt(total)}</b>.</p>
+          <p class="small" style="margin-bottom:12px">Recibos cobrados y aprobados que componen esta comisión de <b>${fmt(total)}</b>. Tocá un recibo para ver cómo pagó el cliente.</p>
           <div class="table-wrap" style="margin-bottom:16px;max-height:440px;overflow-y:auto"><table><thead><tr><th>Fecha</th><th>Empresa</th><th>Cliente</th><th>Recibo</th><th>Tipo</th><th>Importe del recibo</th><th>Base comisionable</th><th>%</th><th>Comisión</th></tr></thead>
-          <tbody>${rows.length===0?'<tr><td colspan="9" class="small" style="white-space:normal">Sin recibos.</td></tr>':rows.map(r=>'<tr><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.empresa)+'</td><td>'+esc(r.cliente)+'</td><td>'+esc(r.nro_pago)+'</td><td>'+esc(r.tipo_doc)+'</td><td>'+fmt(r.importe_pago)+'</td><td>'+fmt(r.base_comisionable)+'</td><td>'+r.pct_comision+'%</td><td>'+fmt(r.comision_a_pagar)+'</td></tr>').join('')}
+          <tbody>${rows.length===0?'<tr><td colspan="9" class="small" style="white-space:normal">Sin recibos.</td></tr>':rows.map(r=>'<tr><td>'+fmtFecha(r.fecha_pago)+'</td><td>'+esc(r.empresa)+'</td><td>'+esc(r.cliente)+'</td><td>'+reciboLink(r.empresa,r.nro_pago)+'</td><td>'+esc(r.tipo_doc)+'</td><td>'+fmt(r.importe_pago)+'</td><td>'+fmt(r.base_comisionable)+'</td><td>'+r.pct_comision+'%</td><td>'+fmt(r.comision_a_pagar)+'</td></tr>').join('')}
           <tr class="total-row"><td colspan="6">TOTAL (${rows.length} recibos)</td><td>${fmt(base)}</td><td></td><td>${fmt(total)}</td></tr>
           </tbody></table></div>
           <div style="text-align:right"><button onclick="closeModal()">Cerrar</button></div>
