@@ -341,8 +341,24 @@ function parseWorkbook(wb){
 
   // Si aparece una hoja separada de Sin Comisión o Excluidos, es el formato viejo (4 hojas).
   // Si no, es el formato nuevo (una sola hoja "Detalle" ya pulida a mano).
-  if(scSheet||excSheet)return parseWorkbookV1(wb,detSheet,scSheet,excSheet);
-  return parseWorkbookV2(wb,detSheet);
+  const res=(scSheet||excSheet)?parseWorkbookV1(wb,detSheet,scSheet,excSheet):parseWorkbookV2(wb,detSheet);
+  return descartarVendedoresInactivos(res);
+}
+
+// Los vendedores marcados activo=false en la tabla `vendedores` (ej. Laura Aguado, que se liquida
+// aparte) no se liquidan en esta app: sus filas se descartan al importar y el preview avisa
+// cuántas fueron, para que no queden como "a revisar" ni sumen comisiones sin querer.
+function descartarVendedoresInactivos(res){
+  const ignorados={};
+  const filtrar=filas=>filas.filter(r=>{
+    const v=findVendedor(r.vendedor_nombre);
+    if(v&&!v.activo){ignorados[v.nombre_mostrar]=(ignorados[v.nombre_mostrar]||0)+1;return false;}
+    return true;
+  });
+  res.detalle=filtrar(res.detalle);
+  res.sinComision=filtrar(res.sinComision);
+  res.ignorados=ignorados;
+  return res;
 }
 
 function parseWorkbookV1(wb,detSheet,scSheet,excSheet){
@@ -529,6 +545,8 @@ function renderCargaPreview(){
     if(!sheetsFound.scSheet)warns+='<div class="alert alert-amber">No encontré la hoja "Sin Comisión - Revisar" — se guardará vacía.</div>';
     if(!sheetsFound.excSheet)warns+='<div class="alert alert-amber">No encontré la hoja "Excluidos" — se guardará vacía.</div>';
   }
+  const ignorados=PARSED.ignorados||{};
+  if(Object.keys(ignorados).length)warns+='<div class="alert alert-gray" style="background:#f5f5f5;color:#555;border:1px solid #e0e0e0">Se ignoraron filas de vendedores que no se liquidan acá (inactivos): <b>'+Object.entries(ignorados).map(([n,c])=>esc(n)+' ('+c+')').join(', ')+'</b>.</div>';
   const conImporteCero=detalle.filter(r=>r.importe_pago===0).length+sinComision.filter(r=>r.importe===0).length;
   if(conImporteCero)warns+='<div class="alert alert-amber">Hay <b>'+conImporteCero+'</b> pago(s) con importe $0 — puede que las columnas del Excel no coincidan con lo esperado. Revisá el preview antes de confirmar.</div>';
   if(desconocidos.length)warns+='<div class="alert alert-red">Vendedor(es) en el Excel que no están en la tabla de vendedores: <b>'+desconocidos.map(esc).join(', ')+'</b>. Revisá el nombre exacto o agregalo en la tabla <code>vendedores</code> antes de confirmar (si confirmás igual, sus comisiones se guardan pero no van a sumar en la cuenta corriente hasta que coincida el nombre).</div>';
