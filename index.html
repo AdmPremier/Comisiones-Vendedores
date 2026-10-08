@@ -976,6 +976,7 @@ async function verLiquidacion(id){
     const pendientesCount=conteo.pendiente+conteo.parcial;
 
     document.getElementById('mc').innerHTML=`
+      <div style="margin-bottom:12px"><button onclick="sTab('historial')">← Volver al Historial</button></div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
         <h2 class="section-title" style="margin-bottom:0">${MESES[liq.mes-1]} ${liq.anio}</h2>
         ${badgeResumenGrupos(conteo)}
