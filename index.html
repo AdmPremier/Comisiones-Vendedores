@@ -883,6 +883,13 @@ function badgeEstado(e,detalle){
   if(e==='rechazada')return '<span class="badge badge-red">Rechazada</span>';
   return '<span class="badge badge-amber">Pendiente</span>';
 }
+// Importe/cantidad con el mismo color que el estado del vendedor (pendiente ámbar, parcial azul,
+// aprobada verde, pagada violeta, rechazada o "a revisar" rojo). Sin estado: texto plano.
+function pastilla(texto,estado){
+  const clase={pendiente:'badge-amber',aprobada:'badge-green',pagada:'badge-purple',rechazada:'badge-red',revisar:'badge-red'}[estado];
+  if(estado==='parcial')return '<span class="badge" style="background:#e3f2fd;color:#1565c0">'+texto+'</span>';
+  return clase?'<span class="badge '+clase+'">'+texto+'</span>':String(texto);
+}
 function badgeResumenGrupos(r){
   if(!r)return '<span class="badge badge-gray">Sin vendedores</span>';
   const parc=r.parcial||0;
@@ -1010,7 +1017,7 @@ async function verLiquidacion(id){
               ?'<button class="danger" style="font-size:12px;padding:4px 10px" onclick="verComisionVendedor('+g.id+')">⚠ Revisar</button>'
               :'<button style="font-size:12px;padding:4px 10px" onclick="verComisionVendedor('+g.id+')">Ver</button>';
           }
-          return '<tr><td>'+esc(k)+'</td><td>'+(v.pct!=null?v.pct+'%':'—')+'</td><td>'+v.cantCom+'</td><td>'+fmt(v.base)+'</td><td>'+fmt(v.aPagar)+'</td><td'+(v.pagada>0?' style="color:#6a1b9a;font-weight:600"':'')+'>'+fmt(v.pagada)+'</td><td>'+v.cantRev+'</td><td>'+fmt(v.baseRev)+'</td><td>'+ver+'</td><td>'+(g?badgeEstado(estadoVisual,estadoVisual==='parcial'?(aprobPorVend[k]||0)+'/'+v.cantCom:''):'<span class="badge badge-gray">—</span>')+motivo+'</td><td>'+accion+'</td></tr>';
+          return '<tr><td>'+esc(k)+'</td><td>'+(v.pct!=null?v.pct+'%':'—')+'</td><td>'+v.cantCom+'</td><td>'+fmt(v.base)+'</td><td>'+pastilla(fmt(v.aPagar),v.aPagar>0.005?estadoVisual:null)+'</td><td>'+pastilla(fmt(v.pagada),v.pagada>0.005?'pagada':null)+'</td><td>'+pastilla(v.cantRev,v.cantRev>0?'revisar':null)+'</td><td>'+fmt(v.baseRev)+'</td><td>'+ver+'</td><td>'+(g?badgeEstado(estadoVisual,estadoVisual==='parcial'?(aprobPorVend[k]||0)+'/'+v.cantCom:''):'<span class="badge badge-gray">—</span>')+motivo+'</td><td>'+accion+'</td></tr>';
         }).join('')}
         <tr class="total-row"><td>TOTAL</td><td></td><td>${totales.cantCom}</td><td>${fmt(totales.base)}</td><td>${fmt(totales.aPagar)}</td><td>${fmt(totales.pagada)}</td><td>${totales.cantRev}</td><td>${fmt(totales.baseRev)}</td><td></td><td></td><td></td></tr>
       </tbody></table></div>
