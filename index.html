@@ -959,13 +959,20 @@ async function verLiquidacion(id){
     detalle.forEach(r=>{
       if(!resumen[r.vendedor_nombre])resumen[r.vendedor_nombre]={pct:r.pct_comision,cantCom:0,base:0,comision:0,cantRev:0,baseRev:0};
       resumen[r.vendedor_nombre].cantCom++;resumen[r.vendedor_nombre].base+=r.base_comisionable;resumen[r.vendedor_nombre].comision+=r.comision_a_pagar;
+      if(r.aprobado)resumen[r.vendedor_nombre].comisionAprob=(resumen[r.vendedor_nombre].comisionAprob||0)+r.comision_a_pagar;
     });
     sinComision.forEach(r=>{
       const key=r.vendedor_nombre||'(sin vendedor)';
       if(!resumen[key])resumen[key]={pct:null,cantCom:0,base:0,comision:0,cantRev:0,baseRev:0};
       resumen[key].cantRev++;resumen[key].baseRev+=r.importe;
     });
-    const totales=Object.values(resumen).reduce((a,v)=>({base:a.base+v.base,comision:a.comision+v.comision,cantCom:a.cantCom+v.cantCom,cantRev:a.cantRev+v.cantRev,baseRev:a.baseRev+v.baseRev}),{base:0,comision:0,cantCom:0,cantRev:0,baseRev:0});
+    // Al marcar "Pagada" a un vendedor, lo aprobado pasa de "Comisión a Pagar" a "Comisión Pagada".
+    Object.entries(resumen).forEach(([k,v])=>{
+      const g=grupoPorVendedor[k];
+      v.pagada=(g&&g.pagado)?(v.comisionAprob||0):0;
+      v.aPagar=v.comision-v.pagada;
+    });
+    const totales=Object.values(resumen).reduce((a,v)=>({base:a.base+v.base,comision:a.comision+v.comision,pagada:a.pagada+v.pagada,aPagar:a.aPagar+v.aPagar,cantCom:a.cantCom+v.cantCom,cantRev:a.cantRev+v.cantRev,baseRev:a.baseRev+v.baseRev}),{base:0,comision:0,pagada:0,aPagar:0,cantCom:0,cantRev:0,baseRev:0});
 
     // Estado de cada vendedor según sus recibos tildados (ver estadoVisualGrupo)
     const aprobPorVend={};
@@ -985,7 +992,7 @@ async function verLiquidacion(id){
       <p class="small" style="margin-bottom:16px">Se aprueba <b>recibo por recibo</b>: entrá con <b>Ver</b> a cada vendedor y tildá los recibos que querés aprobar (los que no tildes quedan pendientes), o aprobá todo de una con el botón Aprobar.${pendientesCount>1?' <span class="link" onclick="aprobarTodosPendientes('+id+')">Aprobar todo lo pendiente de los '+pendientesCount+' vendedores →</span>':''}</p>
 
       <h3 style="font-size:15px;font-weight:600;margin:20px 0 10px">Resumen por Vendedor</h3>
-      <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Vendedor</th><th>%</th><th>Pagos c/comisión</th><th>Base Comisionable</th><th>Comisión a Pagar</th><th>Pagos a revisar</th><th>Base pendiente</th><th></th><th>Estado</th><th>Acción</th></tr></thead>
+      <div class="table-wrap" style="margin-bottom:20px"><table><thead><tr><th>Vendedor</th><th>%</th><th>Pagos c/comisión</th><th>Base Comisionable</th><th>Comisión a Pagar</th><th>Comisión Pagada</th><th>Pagos a revisar</th><th>Base pendiente</th><th></th><th>Estado</th><th>Acción</th></tr></thead>
       <tbody>
         ${Object.entries(resumen).map(([k,v])=>{
           const g=grupoPorVendedor[k];
@@ -1003,9 +1010,9 @@ async function verLiquidacion(id){
               ?'<button class="danger" style="font-size:12px;padding:4px 10px" onclick="verComisionVendedor('+g.id+')">⚠ Revisar</button>'
               :'<button style="font-size:12px;padding:4px 10px" onclick="verComisionVendedor('+g.id+')">Ver</button>';
           }
-          return '<tr><td>'+esc(k)+'</td><td>'+(v.pct!=null?v.pct+'%':'—')+'</td><td>'+v.cantCom+'</td><td>'+fmt(v.base)+'</td><td>'+fmt(v.comision)+'</td><td>'+v.cantRev+'</td><td>'+fmt(v.baseRev)+'</td><td>'+ver+'</td><td>'+(g?badgeEstado(estadoVisual,estadoVisual==='parcial'?(aprobPorVend[k]||0)+'/'+v.cantCom:''):'<span class="badge badge-gray">—</span>')+motivo+'</td><td>'+accion+'</td></tr>';
+          return '<tr><td>'+esc(k)+'</td><td>'+(v.pct!=null?v.pct+'%':'—')+'</td><td>'+v.cantCom+'</td><td>'+fmt(v.base)+'</td><td>'+fmt(v.aPagar)+'</td><td'+(v.pagada>0?' style="color:#6a1b9a;font-weight:600"':'')+'>'+fmt(v.pagada)+'</td><td>'+v.cantRev+'</td><td>'+fmt(v.baseRev)+'</td><td>'+ver+'</td><td>'+(g?badgeEstado(estadoVisual,estadoVisual==='parcial'?(aprobPorVend[k]||0)+'/'+v.cantCom:''):'<span class="badge badge-gray">—</span>')+motivo+'</td><td>'+accion+'</td></tr>';
         }).join('')}
-        <tr class="total-row"><td>TOTAL</td><td></td><td>${totales.cantCom}</td><td>${fmt(totales.base)}</td><td>${fmt(totales.comision)}</td><td>${totales.cantRev}</td><td>${fmt(totales.baseRev)}</td><td></td><td></td><td></td></tr>
+        <tr class="total-row"><td>TOTAL</td><td></td><td>${totales.cantCom}</td><td>${fmt(totales.base)}</td><td>${fmt(totales.aPagar)}</td><td>${fmt(totales.pagada)}</td><td>${totales.cantRev}</td><td>${fmt(totales.baseRev)}</td><td></td><td></td><td></td></tr>
       </tbody></table></div>
 
     `;
